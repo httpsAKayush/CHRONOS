@@ -22,8 +22,13 @@ public:
     void indexHistory();
 
     AstIndexer& getAstIndexer() { return astIndexer_; }
+    Codex& getCodex() { return codex_; }
     void setCurrentCommitHash(const std::string& h) { currentCommitHash_ = h; }
     const std::string& getCurrentCommitHash() const { return currentCommitHash_; }
+    void setCurrentTimestamp(int64_t t) { currentTimestamp_ = t; }
+    int64_t getCurrentTimestamp() const { return currentTimestamp_; }
+    void setCurrentMessage(const std::string& m) { currentMessage_ = m; }
+    const std::string& getCurrentMessage() const { return currentMessage_; }
     void* getRepo() { return repo_; }
 
 private:
@@ -32,6 +37,8 @@ private:
     AstIndexer& astIndexer_;
     void* repo_; 
     std::string currentCommitHash_;
+    int64_t currentTimestamp_;
+    std::string currentMessage_;
 };
 
 } // namespace chronos

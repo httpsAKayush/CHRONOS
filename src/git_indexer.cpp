@@ -66,6 +66,8 @@ void GitIndexer::indexHistory() {
         git_diff_tree_to_tree(&diff, repo, parent_tree, tree, nullptr);
 
         setCurrentCommitHash(oid_str);
+        setCurrentTimestamp(time);
+        setCurrentMessage(msg ? msg : "");
 
         auto diff_cb = [](const git_diff_delta *delta, float progress, void *payload) -> int {
             (void)progress;
@@ -75,8 +77,17 @@ void GitIndexer::indexHistory() {
                 if (git_blob_lookup(&blob, static_cast<git_repository*>(indexer->getRepo()), &delta->new_file.id) == 0) {
                     std::string content(static_cast<const char*>(git_blob_rawcontent(blob)), git_blob_rawsize(blob));
                     std::string path = delta->new_file.path;
-                    indexer->getAstIndexer().indexBuffer(content, path, indexer->getCurrentCommitHash());
+                    auto nodes = indexer->getAstIndexer().indexBuffer(content, path, indexer->getCurrentCommitHash());
                     git_blob_free(blob);
+                    
+                    for (const auto& nodeId : nodes) {
+                        indexer->getCodex().recordHistory(nodeId, indexer->getCurrentCommitHash(), indexer->getCurrentTimestamp(), "AI: Structural mutation detected");
+                    }
+                    
+                    if (!nodes.empty()) {
+                        std::string noteCmd = "git -C " + indexer->repoRoot_ + " notes add -m 'Chronos: Structural mutation detected in " + path + "' " + indexer->getCurrentCommitHash() + " 2>/dev/null";
+                        system(noteCmd.c_str());
+                    }
                 }
             }
             return 0;

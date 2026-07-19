@@ -19,6 +19,7 @@
 #include "chronos/vector_index.hpp"
 #include "chronos/context_builder.hpp"
 #include "chronos/oracle.hpp"
+#include "chronos/git_indexer.hpp"
 #include "chronos/ipc.hpp"
 #include "chronos/ast_indexer.hpp"
 
@@ -85,6 +86,11 @@ int cmdSync(const std::string& repoRoot) {
             ++count;
         }
     }
+
+    GitIndexer gitIndexer(repoRoot, codex, indexer);
+    std::cout << "chronos sync: mapping temporal Git graph...\n";
+    gitIndexer.indexHistory();
+
     std::cout << "chronos sync: re-checked " << count << " files ("
               << indexer.stats().nodesSkippedIdempotent << " already up to date, "
               << indexer.stats().nodesUpserted << " updated)\n";

@@ -156,9 +156,10 @@ void AstIndexer::indexFile(const std::string& relativePath, const std::string& c
     indexBuffer(source, relativePath, commitHash);
 }
 
-void AstIndexer::indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash) {
+std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash) {
+    std::vector<std::string> processedNodes;
     ++stats_.filesProcessed;
-    if (source.empty()) { removeFile(relativePath); return; }
+    if (source.empty()) { removeFile(relativePath); return processedNodes; }
 
 #if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
     TSParser* parser = nullptr;
@@ -181,7 +182,7 @@ void AstIndexer::indexBuffer(const std::string& source, const std::string& relat
         if (!tree) {
             ++stats_.parseFailures;
             ts_parser_delete(parser);
-            return;
+            return processedNodes;
         }
         TSNode root = ts_tree_root_node(tree);
         std::vector<FunctionSpan> spans;
@@ -236,6 +237,24 @@ void AstIndexer::indexBuffer(const std::string& source, const std::string& relat
                 }
             }
 
+            if (!existing) {
+                for (const auto& callTarget : span.outgoingCalls) {
+                    if (callTarget.empty()) continue;
+                    std::string targetSym = "sym:" + callTarget;
+                    if (!codex_.getNode(targetSym)) {
+                        Node stub;
+                        stub.id = targetSym;
+                        stub.file_path = relativePath;
+                        stub.byte_start = 0;
+                        stub.byte_end = 1;
+                        stub.is_active = false;
+                        stub.parse_confidence = 0.0f;
+                        codex_.upsertNode(stub);
+                    }
+                    codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
+                }
+            }
+
             if (!span.name.empty()) {
                 std::string sym = "sym:" + span.name;
                 if (!codex_.getNode(sym)) {
@@ -248,32 +267,16 @@ void AstIndexer::indexBuffer(const std::string& source, const std::string& relat
                     stub.parse_confidence = 0.0f;
                     codex_.upsertNode(stub);
                 }
-                codex_.recordAlias(sym, nodeId, "definition");
+                codex_.upsertEdge({nodeId, sym, "IMPLEMENTS", 1.0f});
+                codex_.recordAlias(sym, nodeId, commitHash);
             }
-
-            for (const auto& callTarget : span.outgoingCalls) {
-                if (callTarget.empty()) continue;
-                std::string targetSym = "sym:" + callTarget;
-                if (!codex_.getNode(targetSym)) {
-                    Node stub;
-                    stub.id = targetSym;
-                    stub.file_path = relativePath;
-                    stub.byte_start = 0;
-                    stub.byte_end = 1;
-                    stub.is_active = false;
-                    stub.parse_confidence = 0.0f;
-                    codex_.upsertNode(stub);
-                }
-                codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
-            }
-
-            std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
-            vectors_.upsert({nodeId, embedText(snippet)});
+            
+            processedNodes.push_back(nodeId);
         }
 
         ts_tree_delete(tree);
         ts_parser_delete(parser);
-        return;
+        return processedNodes;
     }
 #endif
 
@@ -281,7 +284,11 @@ void AstIndexer::indexBuffer(const std::string& source, const std::string& relat
     std::vector<StructuralToken> wholeFileTokens{{relativePath, 1}};
     uint64_t hash = Simhash::compute(wholeFileTokens);
     auto existing = codex_.findBySimhash(hash, relativePath);
-    if (existing) { ++stats_.nodesSkippedIdempotent; return; }
+    if (existing) { 
+        ++stats_.nodesSkippedIdempotent; 
+        processedNodes.push_back(existing->id);
+        return processedNodes; 
+    }
 
     Node n;
     n.id = makeUuid();
@@ -294,6 +301,9 @@ void AstIndexer::indexBuffer(const std::string& source, const std::string& relat
     codex_.upsertNode(n);
     ++stats_.nodesUpserted;
     vectors_.upsert({n.id, embedText(source)});
+    
+    processedNodes.push_back(n.id);
+    return processedNodes;
 }
 
 } // namespace chronos

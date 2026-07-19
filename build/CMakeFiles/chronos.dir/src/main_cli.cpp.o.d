@@ -229,4 +229,5 @@ CMakeFiles/chronos.dir/src/main_cli.cpp.o: \
  /usr/include/c++/16.1.1/bits/node_handle.h \
  /usr/include/c++/16.1.1/bits/binders.h \
  /home/zer0/CHRONO/include/chronos/oracle.hpp \
+ /home/zer0/CHRONO/include/chronos/git_indexer.hpp \
  /home/zer0/CHRONO/include/chronos/ast_indexer.hpp

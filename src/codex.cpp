@@ -62,11 +62,20 @@ void Codex::migrate() {
             id               TEXT PRIMARY KEY,
             file_path        TEXT NOT NULL,
             byte_start       INTEGER NOT NULL,
-            byte_end         INTEGER NOT NULL CHECK (byte_end > byte_start),
+            byte_end         INTEGER NOT NULL,
             simhash          INTEGER NOT NULL,
-            is_active        INTEGER NOT NULL DEFAULT 1,
-            parse_confidence REAL NOT NULL DEFAULT 1.0
+            is_active        INTEGER NOT NULL,
+            parse_confidence REAL NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS history (
+            node_id       TEXT NOT NULL,
+            commit_hash   TEXT NOT NULL,
+            timestamp     INTEGER NOT NULL,
+            synthetic_msg TEXT,
+            PRIMARY KEY(node_id, commit_hash)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);
         CREATE INDEX IF NOT EXISTS idx_nodes_simhash ON nodes(simhash);
 
@@ -221,6 +230,23 @@ std::string Codex::resolveAlias(const std::string& id) {
     }
     sqlite3_finalize(stmt);
     return result;
+}
+
+void Codex::recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_,
+        "INSERT OR REPLACE INTO history (node_id, commit_hash, timestamp, synthetic_msg) VALUES (?1, ?2, ?3, ?4);",
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, commitHash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, timestamp);
+    if (!msg.empty()) {
+        sqlite3_bind_text(stmt, 4, msg.c_str(), -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 4);
+    }
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 }
 
 std::optional<Node> Codex::getNode(const std::string& id) {

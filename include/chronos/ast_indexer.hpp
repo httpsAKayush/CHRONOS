@@ -44,7 +44,7 @@ public:
     void indexFile(const std::string& relativePath, const std::string& commitHash = "LIVE");
 
     // Parses a raw memory buffer (used by GitIndexer for historical commits)
-    void indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash);
+    std::vector<std::string> indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash);
 
     // Marks all nodes previously recorded for `relativePath` inactive; used
     // when a file is deleted (Spec §8 edge case).

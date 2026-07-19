@@ -74,6 +74,9 @@ public:
                       const std::string& commitHash);
     std::string resolveAlias(const std::string& id);           // -> root id
 
+    // --- Temporal ---
+    void recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg);           // -> root id
+
     // --- Lookups ---
     std::optional<Node> getNode(const std::string& id);
     std::optional<Node> findBySimhash(uint64_t simhash, const std::string& filePath);
