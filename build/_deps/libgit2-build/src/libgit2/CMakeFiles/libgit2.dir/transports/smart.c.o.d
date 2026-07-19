@@ -1,0 +1,258 @@
+_deps/libgit2-build/src/libgit2/CMakeFiles/libgit2.dir/transports/smart.c.o: \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/transports/smart.c \
+ /usr/include/stdc-predef.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/transports/smart.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/common.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/git2_util.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-build/src/util/git2_features.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/common.h \
+ /usr/include/time.h /usr/include/features.h \
+ /usr/include/features-time64.h /usr/include/bits/wordsize.h \
+ /usr/include/bits/timesize.h /usr/include/sys/cdefs.h \
+ /usr/include/bits/long-double.h /usr/include/gnu/stubs.h \
+ /usr/include/gnu/stubs-64.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stddef.h \
+ /usr/include/bits/time.h /usr/include/bits/types.h \
+ /usr/include/bits/typesizes.h /usr/include/bits/time64.h \
+ /usr/include/bits/timex.h /usr/include/bits/types/struct_timeval.h \
+ /usr/include/bits/types/clock_t.h /usr/include/bits/types/time_t.h \
+ /usr/include/bits/types/struct_tm.h \
+ /usr/include/bits/types/struct_timespec.h /usr/include/bits/endian.h \
+ /usr/include/bits/endianness.h /usr/include/bits/types/clockid_t.h \
+ /usr/include/bits/types/timer_t.h \
+ /usr/include/bits/types/struct_itimerspec.h \
+ /usr/include/bits/types/locale_t.h /usr/include/bits/types/__locale_t.h \
+ /usr/include/stdlib.h /usr/include/bits/libc-header-start.h \
+ /usr/include/bits/waitflags.h /usr/include/bits/waitstatus.h \
+ /usr/include/bits/floatn.h /usr/include/bits/floatn-common.h \
+ /usr/include/sys/types.h /usr/include/bits/stdint-intn.h \
+ /usr/include/endian.h /usr/include/bits/byteswap.h \
+ /usr/include/bits/uintn-identity.h /usr/include/sys/select.h \
+ /usr/include/bits/select.h /usr/include/bits/types/sigset_t.h \
+ /usr/include/bits/types/__sigset_t.h /usr/include/bits/pthreadtypes.h \
+ /usr/include/bits/thread-shared-types.h \
+ /usr/include/bits/pthreadtypes-arch.h \
+ /usr/include/bits/atomic_wide_counter.h /usr/include/bits/struct_mutex.h \
+ /usr/include/bits/struct_rwlock.h /usr/include/alloca.h \
+ /usr/include/bits/stdlib-bsearch.h /usr/include/bits/types/once_flag.h \
+ /usr/include/bits/stdlib-float.h /usr/include/inttypes.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stdint.h \
+ /usr/include/stdint.h /usr/include/bits/wchar.h \
+ /usr/include/bits/stdint-uintn.h /usr/include/bits/stdint-least.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/sys/errors.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/cc-compat.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stdarg.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/stdbool.h \
+ /usr/include/assert.h /usr/include/errno.h /usr/include/bits/errno.h \
+ /usr/include/linux/errno.h /usr/include/asm/errno.h \
+ /usr/include/asm-generic/errno.h /usr/include/asm-generic/errno-base.h \
+ /usr/include/bits/types/error_t.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/limits.h \
+ /usr/lib/gcc/x86_64-pc-linux-gnu/16.1.1/include/syslimits.h \
+ /usr/include/limits.h /usr/include/bits/posix1_lim.h \
+ /usr/include/bits/local_lim.h /usr/include/linux/limits.h \
+ /usr/include/bits/pthread_stack_min-dynamic.h \
+ /usr/include/bits/posix2_lim.h /usr/include/bits/xopen_lim.h \
+ /usr/include/bits/uio_lim.h /usr/include/stdio.h \
+ /usr/include/bits/types/__fpos_t.h /usr/include/bits/types/__mbstate_t.h \
+ /usr/include/bits/types/__fpos64_t.h /usr/include/bits/types/__FILE.h \
+ /usr/include/bits/types/FILE.h /usr/include/bits/types/struct_FILE.h \
+ /usr/include/bits/types/cookie_io_functions_t.h \
+ /usr/include/bits/stdio_lim.h /usr/include/bits/stdio.h \
+ /usr/include/string.h /usr/include/strings.h /usr/include/sys/stat.h \
+ /usr/include/bits/stat.h /usr/include/bits/struct_stat.h \
+ /usr/include/bits/statx.h /usr/include/linux/stat.h \
+ /usr/include/linux/types.h /usr/include/asm/types.h \
+ /usr/include/asm-generic/types.h /usr/include/asm-generic/int-ll64.h \
+ /usr/include/asm/bitsperlong.h /usr/include/asm-generic/bitsperlong.h \
+ /usr/include/linux/posix_types.h /usr/include/linux/stddef.h \
+ /usr/include/asm/posix_types.h /usr/include/asm/posix_types_64.h \
+ /usr/include/asm-generic/posix_types.h /usr/include/bits/statx-generic.h \
+ /usr/include/bits/types/struct_statx_timestamp.h \
+ /usr/include/bits/types/struct_statx.h /usr/include/unistd.h \
+ /usr/include/bits/posix_opt.h /usr/include/bits/environments.h \
+ /usr/include/bits/confname.h /usr/include/bits/getopt_posix.h \
+ /usr/include/bits/getopt_core.h /usr/include/bits/unistd_ext.h \
+ /usr/include/linux/close_range.h /usr/include/pthread.h \
+ /usr/include/sched.h /usr/include/bits/sched.h \
+ /usr/include/linux/sched/types.h \
+ /usr/include/bits/types/struct_sched_param.h /usr/include/bits/cpu-set.h \
+ /usr/include/bits/setjmp.h \
+ /usr/include/bits/types/struct___jmp_buf_tag.h /usr/include/arpa/inet.h \
+ /usr/include/netinet/in.h /usr/include/sys/socket.h \
+ /usr/include/bits/types/struct_iovec.h /usr/include/bits/socket.h \
+ /usr/include/bits/socket_type.h /usr/include/bits/sockaddr.h \
+ /usr/include/asm/socket.h /usr/include/asm-generic/socket.h \
+ /usr/include/asm/sockios.h /usr/include/asm-generic/sockios.h \
+ /usr/include/bits/types/struct_osockaddr.h /usr/include/bits/in.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/types.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/common.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/buffer.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/oid.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/types.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/experimental.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/errors.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/thread.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/unix/pthread.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/integer.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/assert_safe.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/posix.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/git2_util.h \
+ /usr/include/fcntl.h /usr/include/bits/fcntl.h \
+ /usr/include/bits/fcntl-linux.h /usr/include/bits/cloexec.h \
+ /usr/include/linux/falloc.h /usr/include/linux/openat2.h \
+ /usr/include/bits/openat2.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/unix/posix.h \
+ /usr/include/dirent.h /usr/include/bits/dirent.h \
+ /usr/include/bits/dirent_ext.h /usr/include/sys/param.h \
+ /usr/include/signal.h /usr/include/bits/signum-generic.h \
+ /usr/include/bits/signum-arch.h /usr/include/bits/types/sig_atomic_t.h \
+ /usr/include/bits/types/siginfo_t.h /usr/include/bits/types/__sigval_t.h \
+ /usr/include/bits/siginfo-arch.h /usr/include/bits/siginfo-consts.h \
+ /usr/include/bits/siginfo-consts-arch.h \
+ /usr/include/bits/types/sigval_t.h /usr/include/bits/types/sigevent_t.h \
+ /usr/include/bits/sigevent-consts.h /usr/include/bits/sigaction.h \
+ /usr/include/bits/sigcontext.h /usr/include/bits/types/stack_t.h \
+ /usr/include/sys/ucontext.h /usr/include/bits/sigstack.h \
+ /usr/include/bits/sigstksz.h /usr/include/bits/ss_flags.h \
+ /usr/include/bits/types/struct_sigstack.h /usr/include/bits/sigthread.h \
+ /usr/include/bits/signal_ext.h /usr/include/bits/param.h \
+ /usr/include/linux/param.h /usr/include/asm/param.h \
+ /usr/include/asm-generic/param.h /usr/include/sys/time.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/strnlen.h \
+ /usr/include/poll.h /usr/include/sys/poll.h /usr/include/bits/poll.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/util.h \
+ /usr/include/ctype.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/str.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/alloc.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/sys/alloc.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/ctype_compat.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/errors.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/deprecated.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/attr.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/config.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/blame.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/checkout.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/diff.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/tree.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/object.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/refs.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/strarray.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/cherrypick.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/merge.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/oidarray.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/index.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/indexer.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/annotated_commit.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/repository.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/commit.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/clone.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/remote.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/refspec.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/net.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/transport.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/cert.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/credential.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/pack.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/proxy.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/describe.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/errors.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/filter.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/rebase.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/trace.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/revert.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/revparse.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/stash.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/status.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/submodule.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/worktree.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/credential_helpers.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/sys/credential.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/credential.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/posix.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-build/include/git2.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/annotated_commit.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/apply.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/attr.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/blob.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/blame.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/branch.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/buffer.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/cert.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/checkout.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/cherrypick.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/clone.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/commit.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/config.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/describe.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/diff.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/email.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-build/include/git2/experimental.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/filter.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/global.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/graph.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/ignore.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/index.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/indexer.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/mailmap.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/merge.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/message.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/net.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/notes.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/object.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/odb.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/odb_backend.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/oid.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/pack.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/patch.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/pathspec.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/proxy.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/rebase.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/refdb.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/reflog.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/refs.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/refspec.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/remote.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/repository.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/reset.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/revert.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/revparse.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/revwalk.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/signature.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/stash.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/status.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/submodule.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/tag.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/transport.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/transaction.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/tree.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/version.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/worktree.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/vector.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/push.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/common.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/refspec.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/str.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/remote.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/sys/remote.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/sys/transport.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/oidarray.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/include/git2/strarray.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/net.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/proxy.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/oidarray.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/array.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/staticstr.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/refs.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/strmap.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/oid.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-build/include/git2/experimental.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/sha.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/collisiondetect.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/sha.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/sha1dc/sha1.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/builtin.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/util/hash/rfc6234/sha.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/refspec.h \
+ /home/zer0/CHRONO/build/_deps/libgit2-src/src/libgit2/proxy.h

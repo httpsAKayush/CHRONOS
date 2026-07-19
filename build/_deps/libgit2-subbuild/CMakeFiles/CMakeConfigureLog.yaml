@@ -1,0 +1,72 @@
+
+---
+events:
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/usr/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
+      - "CMakeLists.txt:16 (project)"
+    mode: "program"
+    variable: "CMAKE_UNAME"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "NEVER"
+      SearchAppBundle: "NEVER"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "uname"
+    candidate_directories:
+      - "/home/zer0/.gemini/antigravity/bin/"
+      - "/home/zer0/.config/Antigravity/bin/"
+      - "/home/zer0/.nvm/versions/node/v25.0.0/bin/"
+      - "/home/zer0/anaconda3/condabin/"
+      - "/home/zer0/.local/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/local/bin/"
+      - "/usr/bin/"
+      - "/var/lib/flatpak/exports/bin/"
+      - "/usr/lib/jvm/default/bin/"
+      - "/usr/bin/site_perl/"
+      - "/usr/bin/vendor_perl/"
+      - "/usr/bin/core_perl/"
+      - "/usr/lib/rustup/bin/"
+      - "/var/lib/snapd/snap/bin/"
+      - "/bin/"
+    searched_directories:
+      - "/home/zer0/.gemini/antigravity/bin/uname"
+      - "/home/zer0/.config/Antigravity/bin/uname"
+      - "/home/zer0/.nvm/versions/node/v25.0.0/bin/uname"
+      - "/home/zer0/anaconda3/condabin/uname"
+      - "/home/zer0/.local/bin/uname"
+      - "/usr/local/sbin/uname"
+      - "/usr/local/bin/uname"
+    found: "/usr/bin/uname"
+    search_context:
+      ENV{PATH}:
+        - "/home/zer0/.gemini/antigravity/bin"
+        - "/home/zer0/.config/Antigravity/bin"
+        - "/home/zer0/.nvm/versions/node/v25.0.0/bin"
+        - "/home/zer0/anaconda3/condabin"
+        - "/home/zer0/.local/bin"
+        - "/usr/local/sbin"
+        - "/usr/local/bin"
+        - "/usr/bin"
+        - "/var/lib/flatpak/exports/bin"
+        - "/usr/lib/jvm/default/bin"
+        - "/usr/bin/site_perl"
+        - "/usr/bin/vendor_perl"
+        - "/usr/bin/core_perl"
+        - "/usr/lib/rustup/bin"
+        - "/var/lib/snapd/snap/bin"
+  -
+    kind: "message-v1"
+    backtrace:
+      - "/usr/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
+      - "CMakeLists.txt:16 (project)"
+    message: |
+      The system is: Linux - 6.12.90-1-MANJARO - x86_64
+...

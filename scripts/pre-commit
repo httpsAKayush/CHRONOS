@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Chronos pre-commit hook -- Spec §2 hard constraint: must execute in
+# <500ms. It does NOT parse AST itself (that's the whole point of the
+# Fail-Open/Async design in Spec §6). It just:
+#   1. Collects the list of changed/deleted C/C++ files in this commit.
+#   2. Spawns `chronos-indexer` fully detached (setsid + disown) so this
+#      hook process exits immediately regardless of how long indexing takes.
+#   3. NEVER blocks or fails the commit -- any error here is swallowed.
+#
+# "Fail-open": if chronos-indexer isn't on PATH, or .chronos/ is missing,
+# this hook silently exits 0. A stale/missing index is repaired later via
+# `chronos sync` (Spec §11 mitigation), not by blocking developers now.
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+COMMIT_HASH="$(git rev-parse HEAD 2>/dev/null || echo "PENDING")"
+
+CHANGED=$(git diff --cached --name-only --diff-filter=ACMR -- '*.cpp' '*.h' '*.hpp' '*.cc' '*.py' 2>/dev/null)
+DELETED=$(git diff --cached --name-only --diff-filter=D -- '*.cpp' '*.h' '*.hpp' '*.cc' '*.py' 2>/dev/null)
+
+if [ -z "$CHANGED" ] && [ -z "$DELETED" ]; then
+  exit 0
+fi
+
+if ! command -v chronos-indexer >/dev/null 2>&1; then
+  # Fail-open: no indexer binary available, don't block the developer.
+  exit 0
+fi
+
+ARGS=("$REPO_ROOT" "$COMMIT_HASH")
+if [ -n "$CHANGED" ]; then
+  while IFS= read -r f; do ARGS+=("$f"); done <<< "$CHANGED"
+fi
+if [ -n "$DELETED" ]; then
+  ARGS+=("--deleted")
+  while IFS= read -r f; do ARGS+=("$f"); done <<< "$DELETED"
+fi
+
+# Detach fully: new session (setsid) so it survives the parent git process
+# exiting, stdio redirected so nothing can block on a pipe.
+nohup setsid chronos-indexer "${ARGS[@]}" >/dev/null 2>>"$REPO_ROOT/.chronos/errors.log" &
+disown
+
+exit 0

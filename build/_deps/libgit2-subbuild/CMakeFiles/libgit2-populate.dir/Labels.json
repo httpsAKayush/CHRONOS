@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/CMakeFiles/libgit2-populate"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/CMakeFiles/libgit2-populate.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/CMakeFiles/libgit2-populate-complete.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-build.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-configure.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-download.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-install.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-patch.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-test.rule"
+		},
+		{
+			"file" : "/home/zer0/CHRONO/build/_deps/libgit2-subbuild/libgit2-populate-prefix/src/libgit2-populate-stamp/libgit2-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libgit2-populate"
+		],
+		"name" : "libgit2-populate"
+	}
+}

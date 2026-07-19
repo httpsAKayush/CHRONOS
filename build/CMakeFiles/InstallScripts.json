@@ -1,0 +1,14 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/zer0/CHRONO/build/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/src/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/deps/llhttp/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/deps/xdiff/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/src/libgit2/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/_deps/libgit2-build/src/util/cmake_install.cmake",
+		"/home/zer0/CHRONO/build/tests/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
