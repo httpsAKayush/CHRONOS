@@ -9,3 +9,5 @@ build/
 *.a
 *.dylib
 *.exe
+# Ignore API keys and sensitive information
+.env
