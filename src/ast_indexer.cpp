@@ -169,141 +169,157 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
         parser = ts_parser_new();
         ts_parser_set_language(parser, tree_sitter_python());
 #endif
-    } else if (ext == ".cpp" || ext == ".hpp" || ext == ".c" || ext == ".h" || ext == ".cc" || ext == ".cxx") {
+    } else {
 #if CHRONOS_HAVE_TREE_SITTER_CPP
         parser = ts_parser_new();
         ts_parser_set_language(parser, tree_sitter_cpp());
 #endif
     }
-    
+
     if (parser) {
         TSTree* tree = ts_parser_parse_string(parser, nullptr, source.c_str(),
                                                static_cast<uint32_t>(source.size()));
         if (!tree) {
+            // Malformed input that tree-sitter's incremental parser couldn't
+            // even produce a (possibly-error-node-laden) tree for at all.
+            // Spec §7 Error policy: "log and continue" -- record the
+            // failure and degrade to a whole-file low-confidence node
+            // rather than losing the file from the index entirely.
             ++stats_.parseFailures;
+            ts_parser_delete(parser);
+            goto degrade;
+        }
+        {
+            TSNode root = ts_tree_root_node(tree);
+            bool hasSyntaxError = ts_node_has_error(root);
+            std::vector<FunctionSpan> spans;
+            walk(root, source, spans);
+
+            if (spans.empty()) {
+                // tree-sitter parsed *something* but found no
+                // function_definition nodes at all (e.g. a header full of
+                // macros/templates it couldn't recognize as such, or a
+                // genuinely malformed file where the whole body collapsed
+                // into ERROR nodes). Per Structural Uncertainty (Spec
+                // Glossary), fall back to a whole-file node instead of
+                // silently indexing nothing for this file.
+                ts_tree_delete(tree);
+                ts_parser_delete(parser);
+                if (hasSyntaxError) ++stats_.parseFailures;
+                goto degrade;
+            }
+
+            for (auto& span : spans) {
+                uint64_t hash = Simhash::compute(span.tokens);
+                auto existing = codex_.findBySimhash(hash, relativePath);
+                std::string nodeId;
+
+                if (existing) {
+                    nodeId = existing->id;
+                } else {
+                    nodeId = makeUuid();
+
+                    auto renamedFrom = codex_.findBySimhashGlobal(hash);
+                    if (renamedFrom && renamedFrom->id != nodeId) {
+                        codex_.recordAlias(renamedFrom->id, nodeId, commitHash);
+                    }
+
+                    std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
+                    vectors_.upsert({nodeId, embedText(snippet)});
+                    ++stats_.nodesUpserted;
+                }
+
+                Node n;
+                n.id = nodeId;
+                n.file_path = relativePath;
+                n.byte_start = span.byteStart;
+                n.byte_end = span.byteEnd;
+                n.simhash = hash;
+                n.is_active = true;
+                // A function that individually parsed clean still inherits
+                // the file's overall syntax-error state as a soft signal --
+                // e.g. a malformed sibling function elsewhere in the file
+                // can indicate the grammar mis-recovered around this one
+                // too, even though this span itself looked well-formed.
+                n.parse_confidence = hasSyntaxError ? 0.5f : 1.0f;
+                codex_.upsertNode(n);
+
+                // Outgoing CALLS edges + stub target nodes are recorded
+                // exactly once per newly-discovered node (fixed: this used
+                // to run twice back-to-back, double-writing every edge).
+                if (!existing) {
+                    for (const auto& callTarget : span.outgoingCalls) {
+                        if (callTarget.empty()) continue;
+                        std::string targetSym = "sym:" + callTarget;
+                        if (!codex_.getNode(targetSym)) {
+                            Node stub;
+                            stub.id = targetSym;
+                            stub.file_path = relativePath;
+                            stub.byte_start = 0;
+                            stub.byte_end = 1;
+                            stub.is_active = false;
+                            stub.parse_confidence = 0.0f;
+                            codex_.upsertNode(stub);
+                        }
+                        codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
+                    }
+                }
+
+                if (!span.name.empty()) {
+                    std::string sym = "sym:" + span.name;
+                    if (!codex_.getNode(sym)) {
+                        Node stub;
+                        stub.id = sym;
+                        stub.file_path = relativePath;
+                        stub.byte_start = 0;
+                        stub.byte_end = 1;
+                        stub.is_active = false;
+                        stub.parse_confidence = 0.0f;
+                        codex_.upsertNode(stub);
+                    }
+                    codex_.upsertEdge({nodeId, sym, "IMPLEMENTS", 1.0f});
+                    codex_.recordAlias(sym, nodeId, commitHash);
+                }
+
+                processedNodes.push_back(nodeId);
+            }
+
+            ts_tree_delete(tree);
             ts_parser_delete(parser);
             return processedNodes;
         }
-        TSNode root = ts_tree_root_node(tree);
-        std::vector<FunctionSpan> spans;
-        walk(root, source, spans);
-
-        for (auto& span : spans) {
-            uint64_t hash = Simhash::compute(span.tokens);
-            auto existing = codex_.findBySimhash(hash, relativePath);
-            std::string nodeId;
-            
-            if (existing) {
-                nodeId = existing->id;
-            } else {
-                nodeId = makeUuid();
-                
-                auto renamedFrom = codex_.findBySimhashGlobal(hash);
-                if (renamedFrom && renamedFrom->id != nodeId) {
-                    codex_.recordAlias(renamedFrom->id, nodeId, commitHash);
-                }
-
-                std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
-                vectors_.upsert({nodeId, embedText(snippet)});
-                ++stats_.nodesUpserted;
-            }
-
-            Node n;
-            n.id = nodeId;
-            n.file_path = relativePath;
-            n.byte_start = span.byteStart;
-            n.byte_end = span.byteEnd;
-            n.simhash = hash;
-            n.is_active = true;
-            n.parse_confidence = 1.0f;
-            codex_.upsertNode(n);
-
-            if (!existing) {
-                // Record outgoing edges only for new nodes
-                for (const auto& callTarget : span.outgoingCalls) {
-                    if (callTarget.empty()) continue;
-                    std::string targetSym = "sym:" + callTarget;
-                    if (!codex_.getNode(targetSym)) {
-                        Node stub;
-                        stub.id = targetSym;
-                        stub.file_path = relativePath;
-                        stub.byte_start = 0;
-                        stub.byte_end = 1;
-                        stub.is_active = false;
-                        stub.parse_confidence = 0.0f;
-                        codex_.upsertNode(stub);
-                    }
-                    codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
-                }
-            }
-
-            if (!existing) {
-                for (const auto& callTarget : span.outgoingCalls) {
-                    if (callTarget.empty()) continue;
-                    std::string targetSym = "sym:" + callTarget;
-                    if (!codex_.getNode(targetSym)) {
-                        Node stub;
-                        stub.id = targetSym;
-                        stub.file_path = relativePath;
-                        stub.byte_start = 0;
-                        stub.byte_end = 1;
-                        stub.is_active = false;
-                        stub.parse_confidence = 0.0f;
-                        codex_.upsertNode(stub);
-                    }
-                    codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
-                }
-            }
-
-            if (!span.name.empty()) {
-                std::string sym = "sym:" + span.name;
-                if (!codex_.getNode(sym)) {
-                    Node stub;
-                    stub.id = sym;
-                    stub.file_path = relativePath;
-                    stub.byte_start = 0;
-                    stub.byte_end = 1;
-                    stub.is_active = false;
-                    stub.parse_confidence = 0.0f;
-                    codex_.upsertNode(stub);
-                }
-                codex_.upsertEdge({nodeId, sym, "IMPLEMENTS", 1.0f});
-                codex_.recordAlias(sym, nodeId, commitHash);
-            }
-            
-            processedNodes.push_back(nodeId);
-        }
-
-        ts_tree_delete(tree);
-        ts_parser_delete(parser);
-        return processedNodes;
     }
 #endif
 
-    // Graceful degrade
-    std::vector<StructuralToken> wholeFileTokens{{relativePath, 1}};
-    uint64_t hash = Simhash::compute(wholeFileTokens);
-    auto existing = codex_.findBySimhash(hash, relativePath);
-    if (existing) { 
-        ++stats_.nodesSkippedIdempotent; 
-        processedNodes.push_back(existing->id);
-        return processedNodes; 
-    }
+degrade:
+    // Graceful degrade (no tree-sitter grammar linked, or the file couldn't
+    // be resolved into any function span above): whole-file node with
+    // parse_confidence = 0.0, per Structural Uncertainty (Spec Glossary).
+    {
+        std::vector<StructuralToken> wholeFileTokens{{relativePath, 1}};
+        uint64_t hash = Simhash::compute(wholeFileTokens);
+        auto existing = codex_.findBySimhash(hash, relativePath);
+        if (existing) {
+            ++stats_.nodesSkippedIdempotent;
+            processedNodes.push_back(existing->id);
+            return processedNodes;
+        }
 
-    Node n;
-    n.id = makeUuid();
-    n.file_path = relativePath;
-    n.byte_start = 0;
-    n.byte_end = static_cast<int64_t>(source.size());
-    n.simhash = hash;
-    n.is_active = true;
-    n.parse_confidence = 0.0f;
-    codex_.upsertNode(n);
-    ++stats_.nodesUpserted;
-    vectors_.upsert({n.id, embedText(source)});
-    
-    processedNodes.push_back(n.id);
-    return processedNodes;
+        Node n;
+        n.id = makeUuid();
+        n.file_path = relativePath;
+        n.byte_start = 0;
+        n.byte_end = static_cast<int64_t>(source.size());
+        n.simhash = hash;
+        n.is_active = true;
+        n.parse_confidence = 0.0f;
+        codex_.upsertNode(n);
+        ++stats_.nodesUpserted;
+        vectors_.upsert({n.id, embedText(source)});
+
+        processedNodes.push_back(n.id);
+        return processedNodes;
+    }
 }
 
 } // namespace chronos
