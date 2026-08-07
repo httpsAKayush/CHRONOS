@@ -40,6 +40,7 @@ add_library(chronos_core
   src/ppr.cpp
   src/vector_index.cpp
   src/ast_indexer.cpp
+  src/ast_mutation_scorer.cpp
   src/ipc.cpp
   src/context_builder.cpp
   src/oracle.cpp

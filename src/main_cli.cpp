@@ -80,7 +80,7 @@ int cmdSync(const std::string& repoRoot) {
         if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
         if (entry.path().string().find("/.git/") != std::string::npos) continue;
         auto ext = entry.path().extension().string();
-        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py") {
+        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md") {
             std::string rel = fs::relative(entry.path(), repoRoot).string();
             indexer.indexFile(rel, "sync");
             ++count;
@@ -177,6 +177,29 @@ int cmdTrace(const std::string& repoRoot, const std::string& traceId) {
     return 0;
 }
 
+int cmdTimeline(const std::string& repoRoot, const std::string& target) {
+    Codex codex(repoRoot);
+    std::string rootId = codex.resolveAlias(target);
+    auto history = codex.getHistory(rootId);
+    
+    if (history.empty()) {
+        std::cerr << "chronos timeline: No history found for target '" << target << "'\n";
+        return 1;
+    }
+    
+    std::cout << "Temporal Timeline for " << target << " (" << rootId << ")\n";
+    std::cout << "--------------------------------------------------------\n";
+    for (const auto& rec : history) {
+        std::string cmd = "git -C " + repoRoot + " show -s --format=\"%h %cd: %s\" --date=short " + rec.commitHash;
+        std::system(cmd.c_str());
+        if (!rec.syntheticMsg.empty()) {
+            std::cout << "  [AI]: " << rec.syntheticMsg << "\n";
+        }
+        std::cout << "--------------------------------------------------------\n";
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -196,6 +219,10 @@ int main(int argc, char** argv) {
     if (cmd == "trace") {
         if (argc < 3) { std::cerr << "usage: chronos trace <traceId>\n"; return 2; }
         return cmdTrace(repoRoot, argv[2]);
+    }
+    if (cmd == "timeline") {
+        if (argc < 3) { std::cerr << "usage: chronos timeline <target>\n"; return 2; }
+        return cmdTimeline(repoRoot, argv[2]);
     }
 
     std::cerr << "unknown command: " << cmd << "\n";

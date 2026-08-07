@@ -74,8 +74,20 @@ public:
                       const std::string& commitHash);
     std::string resolveAlias(const std::string& id);           // -> root id
 
+    struct HistoryRecord {
+        std::string nodeId;
+        std::string commitHash;
+        int64_t timestamp;
+        std::string syntheticMsg;
+    };
+
     // --- Temporal ---
-    void recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg);           // -> root id
+    void recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg);
+    std::vector<HistoryRecord> getHistory(const std::string& nodeId);
+
+    // --- Transactions ---
+    void beginTransaction();
+    void commitTransaction();
 
     // --- Lookups ---
     std::optional<Node> getNode(const std::string& id);

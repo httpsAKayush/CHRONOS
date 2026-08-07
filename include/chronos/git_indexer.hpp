@@ -39,6 +39,8 @@ private:
     std::string currentCommitHash_;
     int64_t currentTimestamp_;
     std::string currentMessage_;
+public:
+    std::vector<std::string> modifiedFilesForCurrentCommit_;
 };
 
 } // namespace chronos

@@ -37,50 +37,71 @@ constexpr auto kIdleTimeout = 15min; // FR-5
 // external HTTP library — this only ever talks to 127.0.0.1, matching the
 // Spec's "strictly local, no network exposure" constraint (the socket
 // itself never leaves loopback).
-std::string ollamaChatBlocking(const std::string& systemPrompt, const std::string& userQuery) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return "";
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(11434);
-    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        ::close(fd);
-        return ""; // Ollama not running -> caller falls back to Oracle-Only
+std::string openAiChatBlocking(const std::string& systemPrompt, const std::string& userQuery) {
+    const char* apiKey = std::getenv("OPENAI_API_KEY");
+    if (!apiKey) {
+        std::cerr << "chronos-daemon: OPENAI_API_KEY environment variable not set. Falling back to Oracle-Only.\n";
+        return "";
     }
 
     std::string escapedSys, escapedUser;
-    for (char c : systemPrompt) { if (c == '"' || c == '\\') escapedSys += '\\'; escapedSys += c; }
-    for (char c : userQuery) { if (c == '"' || c == '\\') escapedUser += '\\'; escapedUser += c; }
+    for (char c : systemPrompt) {
+        if (c == '"' || c == '\\') escapedSys += '\\';
+        if (c == '\n') escapedSys += "\\n";
+        else escapedSys += c;
+    }
+    for (char c : userQuery) {
+        if (c == '"' || c == '\\') escapedUser += '\\';
+        if (c == '\n') escapedUser += "\\n";
+        else escapedUser += c;
+    }
 
-    std::string body = "{\"model\":\"llama3\",\"stream\":false,\"messages\":["
+    std::string body = "{\"model\":\"gpt-4o-mini\",\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
-    std::string req = "POST /api/chat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                       "Content-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
-    ::write(fd, req.data(), req.size());
 
-    std::string resp;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(fd, buf, sizeof(buf))) > 0) resp.append(buf, n);
-    ::close(fd);
+    std::string cmd = "curl -s https://api.openai.com/v1/chat/completions "
+                      "-H \"Content-Type: application/json\" "
+                      "-H \"Authorization: Bearer " + std::string(apiKey) + "\" "
+                      "-d '" + body + "'";
 
-    // Strip HTTP headers; caller only needs the JSON body's "content" field,
-    // extracted with the same tiny field-scan used in ipc.cpp.
-    size_t bodyStart = resp.find("\r\n\r\n");
-    return bodyStart == std::string::npos ? "" : resp.substr(bodyStart + 4);
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return "";
+
+    char buffer[128];
+    std::string result = "";
+    while (!feof(pipe)) {
+        if (fgets(buffer, 128, pipe) != nullptr)
+            result += buffer;
+    }
+    pclose(pipe);
+    return result;
 }
 
-std::string extractContent(const std::string& ollamaJson) {
-    size_t pos = ollamaJson.find("\"content\":\"");
-    if (pos == std::string::npos) return "";
-    pos += 11;
+std::string extractContent(const std::string& openaiJson) {
+    // Basic JSON extraction for the message content in OpenAI's response format
+    size_t choicesPos = openaiJson.find("\"choices\"");
+    if (choicesPos == std::string::npos) return "";
+    
+    size_t contentPos = openaiJson.find("\"content\":", choicesPos);
+    if (contentPos == std::string::npos) return "";
+    
+    // Find the first quote after "content":
+    size_t startPos = openaiJson.find("\"", contentPos + 10);
+    if (startPos == std::string::npos) return "";
+    startPos++; // skip the quote
+    
     std::string out;
-    for (size_t i = pos; i < ollamaJson.size(); ++i) {
-        if (ollamaJson[i] == '\\' && i + 1 < ollamaJson.size()) { out += ollamaJson[i + 1]; ++i; continue; }
-        if (ollamaJson[i] == '"') break;
-        out += ollamaJson[i];
+    for (size_t i = startPos; i < openaiJson.size(); ++i) {
+        if (openaiJson[i] == '\\' && i + 1 < openaiJson.size()) {
+            if (openaiJson[i+1] == 'n') { out += '\n'; i++; continue; }
+            if (openaiJson[i+1] == '"') { out += '"'; i++; continue; }
+            out += openaiJson[i + 1];
+            i++;
+            continue;
+        }
+        if (openaiJson[i] == '"') break;
+        out += openaiJson[i];
     }
     return out;
 }
@@ -124,7 +145,7 @@ int main(int argc, char** argv) {
             systemPrompt += cn.codeSnippet + "\n\n";
         }
 
-        std::string rawResp = ollamaChatBlocking(systemPrompt, req.userQuery);
+        std::string rawResp = openAiChatBlocking(systemPrompt, req.userQuery);
         std::string content = extractContent(rawResp);
 
         ChronosResponseChunk chunk;

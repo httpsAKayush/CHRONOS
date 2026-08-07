@@ -249,6 +249,28 @@ void Codex::recordHistory(const std::string& nodeId, const std::string& commitHa
     sqlite3_finalize(stmt);
 }
 
+std::vector<Codex::HistoryRecord> Codex::getHistory(const std::string& nodeId) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_,
+        "SELECT node_id, commit_hash, timestamp, synthetic_msg FROM history "
+        "WHERE node_id = ?1 ORDER BY timestamp DESC;",
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    
+    std::vector<Codex::HistoryRecord> records;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        HistoryRecord rec;
+        rec.nodeId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        rec.commitHash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        rec.timestamp = sqlite3_column_int64(stmt, 2);
+        const char* msg = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        if (msg) rec.syntheticMsg = msg;
+        records.push_back(rec);
+    }
+    sqlite3_finalize(stmt);
+    return records;
+}
+
 std::optional<Node> Codex::getNode(const std::string& id) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
@@ -420,6 +442,14 @@ std::optional<TraceResult> Codex::getTrace(const std::string& traceId) {
     }
     
     return result;
+}
+
+void Codex::beginTransaction() {
+    sqlite3_exec(db_, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+}
+
+void Codex::commitTransaction() {
+    sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, nullptr);
 }
 
 } // namespace chronos

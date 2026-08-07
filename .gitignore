@@ -1,3 +1,11 @@
 
 # Added by `chronos init` -- contains proprietary source structure
 .chronos/
+# Ignore build directories and compiled output
+build/
+.chronos/
+*.o
+*.so
+*.a
+*.dylib
+*.exe

@@ -169,7 +169,7 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
         parser = ts_parser_new();
         ts_parser_set_language(parser, tree_sitter_python());
 #endif
-    } else {
+    } else if (ext == ".cpp" || ext == ".hpp" || ext == ".c" || ext == ".h" || ext == ".cc" || ext == ".cxx") {
 #if CHRONOS_HAVE_TREE_SITTER_CPP
         parser = ts_parser_new();
         ts_parser_set_language(parser, tree_sitter_cpp());
