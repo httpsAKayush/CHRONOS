@@ -11,3 +11,5 @@ build/
 *.exe
 # Ignore API keys and sensitive information
 .env
+
+.agents/
