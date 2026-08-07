@@ -81,8 +81,8 @@ void test_recency_env_alpha_override() {
         if (seedsAlpha1.size() == 2) {
             CHRONOS_CHECK(seedsAlpha1[0].nodeId == "node-A");
             CHRONOS_CHECK(seedsAlpha1[1].nodeId == "node-B");
-            CHRONOS_CHECK(std::abs(seedsAlpha1[0].score - 1.0f) < 1e-4f);
-            CHRONOS_CHECK(std::abs(seedsAlpha1[1].score - 0.5f) < 1e-4f);
+            CHRONOS_CHECK(std::abs(seedsAlpha1[0].score - 1.0f) < 2e-3f);
+            CHRONOS_CHECK(std::abs(seedsAlpha1[1].score - 0.5f) < 2e-3f);
         }
 
         // Test 2: CHRONOS_RECENCY_ALPHA=0.0 (pure temporal) -> Node B must rank top

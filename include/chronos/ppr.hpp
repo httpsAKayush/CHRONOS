@@ -29,23 +29,39 @@ class PPREngine {
 public:
     explicit PPREngine(sqlite3* db) : db_(db) {}
 
-    // Single-horizon local push. `alpha` is the PPR jump probability (Spec
-    // default: dampingFactor=0.85 => alpha=0.15). `epsilon` bounds residual
-    // mass per node (push stops once residual/degree < epsilon), which is
-    // what keeps this O(1/epsilon) instead of O(N).
-    PPRScoreMap localPush(const std::string& seedId, double alpha,
+    // Multi-seed local push. `alpha` is the PPR jump probability (decay).
+    // `epsilon` bounds residual mass per node (push condition: r(u) >= epsilon * d_out(u)).
+    PPRScoreMap localPush(const std::vector<std::string>& seeds, double alpha,
                           double epsilon, int nodeBudget);
 
-    // Dual-Horizon: runs a tight push (small alpha => stays close to seed,
-    // good for "what does X call" diagnostic queries) and a wide push
-    // (large alpha => spreads further, good for "how is X used across the
-    // architecture") then fuses the two rankings with RRF.
-    PPRScoreMap dualHorizonPush(const std::string& seedId, int nodeBudget);
+    // Single-seed overload for backward compatibility.
+    PPRScoreMap localPush(const std::string& seedId, double alpha,
+                          double epsilon, int nodeBudget) {
+        return localPush(std::vector<std::string>{seedId}, alpha, epsilon, nodeBudget);
+    }
+
+    // Dual-Horizon multi-seed push: tight (alpha=0.5, epsilon=1e-4) and wide (alpha=0.1, epsilon=1e-5) fused via RRF.
+    PPRScoreMap dualHorizonPush(const std::vector<std::string>& seeds, int nodeBudget);
+
+    // Single-seed overload for backward compatibility.
+    PPRScoreMap dualHorizonPush(const std::string& seedId, int nodeBudget) {
+        return dualHorizonPush(std::vector<std::string>{seedId}, nodeBudget);
+    }
+
+    void clearCache() { adjacencyCache_.clear(); }
 
 private:
     sqlite3* db_;
-    // Returns adjacent (target_id, weight) pairs for CALLS/INHERITS/
-    // PROBABLE_TARGET edges out of `nodeId`.
+
+    struct CachedNode {
+        std::vector<std::pair<std::string, double>> edges;
+        double outWeightSum = 0.0;
+    };
+    std::unordered_map<std::string, CachedNode> adjacencyCache_;
+
+    const CachedNode& getCachedNode(const std::string& nodeId);
+
+    // Returns adjacent (target_id, weight) pairs for edges out of `nodeId`.
     std::vector<std::pair<std::string, double>> outEdges(const std::string& nodeId);
 };
 

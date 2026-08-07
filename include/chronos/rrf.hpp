@@ -9,9 +9,19 @@
 
 namespace chronos {
 
+using RankList = std::vector<std::pair<std::string, double>>;
+
+// Blends arbitrary N >= 2 rank lists using Reciprocal Rank Fusion.
+// Formula: RRF(d) = \sum_{m \in M} \frac{w_m}{k + r_m(d)}
+std::vector<std::pair<std::string, double>> blendRRF(
+    const std::vector<RankList>& rankLists,
+    double k = 60.0,
+    const std::vector<double>& weights = {});
+
+// Backward-compatible 2-list wrapper
 std::vector<std::pair<std::string, double>> reciprocalRankFusion(
-    const std::vector<std::pair<std::string, double>>& rankedListA,
-    const std::vector<std::pair<std::string, double>>& rankedListB,
+    const RankList& rankedListA,
+    const RankList& rankedListB,
     double k = 60.0);
 
 } // namespace chronos

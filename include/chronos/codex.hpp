@@ -105,6 +105,8 @@ public:
     // Implemented in ppr.cpp (kept separate from storage access).
     TraceResult localPushPPR(const std::string& seedNodeId, int budget,
                               double dampingFactor = 0.85);
+    TraceResult localPushPPR(const std::vector<std::string>& seeds, int budget,
+                              double dampingFactor = 0.85);
 
     sqlite3* raw() { return db_; }
 

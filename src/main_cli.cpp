@@ -138,6 +138,8 @@ int cmdAsk(const std::string& repoRoot, const std::string& query) {
         // Spec unhappy path / FR-7: daemon unreachable -> Oracle-Only Mode.
         std::cout << "[!] LLM daemon unavailable -- falling back to Oracle-Only Mode.\n\n";
         std::cout << oracle.renderTrace(built.rawTrace);
+        std::cout << "\nTraceability ID: " << built.request.traceId
+                  << "  (run `chronos trace " << built.request.traceId << "` later)\n";
         return 0;
     }
 
@@ -157,6 +159,8 @@ int cmdAsk(const std::string& repoRoot, const std::string& query) {
         // FR-7 fallback also covers "model errored / returned nothing".
         std::cout << "\n[!] LLM produced no response -- falling back to Oracle-Only Mode.\n\n";
         std::cout << oracle.renderTrace(built.rawTrace);
+        std::cout << "\nTraceability ID: " << built.request.traceId
+                  << "  (run `chronos trace " << built.request.traceId << "` later)\n";
         return 0;
     }
 

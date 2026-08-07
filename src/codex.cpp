@@ -360,26 +360,26 @@ std::optional<Node> Codex::findBySimhashGlobal(uint64_t simhash) {
     return out;
 }
 
-TraceResult Codex::localPushPPR(const std::string& seedNodeId, int budget,
+TraceResult Codex::localPushPPR(const std::vector<std::string>& seeds, int budget,
                                  double dampingFactor) {
     (void)dampingFactor; // dual-horizon push internally picks its own alphas
     PPREngine engine(db_);
-    PPRScoreMap scores = engine.dualHorizonPush(seedNodeId, budget);
+    PPRScoreMap scores = engine.dualHorizonPush(seeds, budget);
 
     TraceResult result;
     std::vector<std::pair<std::string, double>> ranked(scores.nodeIdToScore.begin(),
                                                          scores.nodeIdToScore.end());
-    std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.second > b.second; });
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
     if (static_cast<int>(ranked.size()) > budget) ranked.resize(budget);
 
-    for (auto& [id, score] : ranked) {
+    for (const auto& [id, score] : ranked) {
         auto node = getNode(id);
         if (!node) continue;
         if (node->parse_confidence < 0.5f) result.any_low_confidence = true;
         result.nodes.push_back(*node);
     }
 
-    for (auto& n : result.nodes) {
+    for (const auto& n : result.nodes) {
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db_,
             "SELECT source_id, target_id, type, probable_target_weight FROM edges "
@@ -390,13 +390,18 @@ TraceResult Codex::localPushPPR(const std::string& seedNodeId, int budget,
             e.source_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
             e.target_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
             e.type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-            e.probable_target_weight = sqlite3_column_double(stmt, 3);
+            e.probable_target_weight = static_cast<float>(sqlite3_column_double(stmt, 3));
             result.edges.push_back(e);
         }
         sqlite3_finalize(stmt);
     }
 
     return result;
+}
+
+TraceResult Codex::localPushPPR(const std::string& seedNodeId, int budget,
+                                 double dampingFactor) {
+    return localPushPPR(std::vector<std::string>{seedNodeId}, budget, dampingFactor);
 }
 
 void Codex::recordTrace(const std::string& traceId, const TraceResult& trace) {

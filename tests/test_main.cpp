@@ -7,6 +7,7 @@ void run_oracle_harness_tests();
 void run_recency_tests();
 void run_ast_mutation_scorer_tests();
 void run_staging_check_tests();
+void run_vector_quantization_tiering_tests();
 
 int main() {
     run_simhash_tests();
@@ -16,6 +17,7 @@ int main() {
     run_recency_tests();
     run_ast_mutation_scorer_tests();
     run_staging_check_tests();
+    run_vector_quantization_tiering_tests();
 
     if (g_failures == 0) {
         std::cout << "All Chronos tests passed.\n";

@@ -230,11 +230,9 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
 
                     std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
                     
-                    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    bool isColdTier = (timestamp > 0) && ((now - timestamp) > 31536000); // 1 year
-                    
-                    if (!isColdTier) {
-                        vectors_.upsert({nodeId, embedText(snippet), timestamp});
+                    MemoryTier tier = getMemoryTier(timestamp);
+                    if (tier != MemoryTier::Cold) {
+                        vectors_.upsert({nodeId, embedText(snippet), timestamp, tier});
                     }
                     ++stats_.nodesUpserted;
                 }
@@ -326,10 +324,9 @@ degrade:
         codex_.upsertNode(n);
         ++stats_.nodesUpserted;
         
-        int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        bool isColdTier = (timestamp > 0) && ((now - timestamp) > 31536000); // 1 year
-        if (!isColdTier) {
-            vectors_.upsert({n.id, embedText(source), timestamp});
+        MemoryTier tier = getMemoryTier(timestamp);
+        if (tier != MemoryTier::Cold) {
+            vectors_.upsert({n.id, embedText(source), timestamp, tier});
         }
 
         processedNodes.push_back(n.id);

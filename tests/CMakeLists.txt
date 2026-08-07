@@ -7,6 +7,7 @@ add_executable(chronos_tests
   test_recency.cpp
   test_ast_mutation_scorer.cpp
   test_staging_check.cpp
+  test_vector_quantization_tiering.cpp
 )
 target_link_libraries(chronos_tests PRIVATE chronos_core)
 add_test(NAME chronos_tests COMMAND chronos_tests)

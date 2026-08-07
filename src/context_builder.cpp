@@ -1,5 +1,6 @@
 #include "chronos/context_builder.hpp"
 #include "chronos/mmr.hpp"
+#include "chronos/rrf.hpp"
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -51,8 +52,12 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
         return result;
     }
 
-    // --- Hop 2: Codex local-push PPR from the best seed ---
-    TraceResult trace = codex_.localPushPPR(seeds.front().nodeId, pprBudget);
+    // --- Hop 2: Codex local-push PPR from all seeds ---
+    std::vector<std::string> seedIds;
+    for (const auto& s : seeds) {
+        seedIds.push_back(s.nodeId);
+    }
+    TraceResult trace = codex_.localPushPPR(seedIds, pprBudget);
     result.rawTrace = trace;
 
     if (trace.nodes.empty()) {
@@ -68,17 +73,32 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
         }
     }
 
+    // --- Blend Hop 1 semantic vector ranks and Hop 2 structural PPR ranks via RRF ---
+    RankList hop1_ranks;
+    for (const auto& s : seeds) {
+        hop1_ranks.emplace_back(s.nodeId, s.score);
+    }
+
+    RankList hop2_ranks;
+    for (const auto& n : trace.nodes) {
+        hop2_ranks.emplace_back(n.id, 0.0);
+    }
+
+    RankList fusedRRF = blendRRF({hop1_ranks, hop2_ranks}, 60.0);
+    std::unordered_map<std::string, double> fusedScoreMap;
+    for (const auto& [id, score] : fusedRRF) {
+        fusedScoreMap[id] = score;
+    }
+
     // --- Connectivity-based MMR pruning to the context node budget ---
     std::vector<MMRCandidate> candidates;
-    std::unordered_map<std::string, double> seedScoreById;
-    for (auto& s : seeds) seedScoreById[s.nodeId] = s.score;
-
-    for (auto& n : trace.nodes) {
-        double relevance = seedScoreById.count(n.id) ? seedScoreById[n.id] : 0.5; // PPR already ranked order
+    for (const auto& n : trace.nodes) {
+        double relevance = fusedScoreMap.count(n.id) ? fusedScoreMap[n.id] : 0.0;
         candidates.push_back({n.id, relevance});
     }
+
     std::unordered_map<std::string, std::unordered_set<std::string>> adjacency;
-    for (auto& e : trace.edges) {
+    for (const auto& e : trace.edges) {
         adjacency[e.source_id].insert(e.target_id);
         adjacency[e.target_id].insert(e.source_id);
     }

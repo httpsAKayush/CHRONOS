@@ -32,10 +32,75 @@ double getEnvDouble(const char* name, double defaultValue, double minVal, double
 }
 } // namespace
 
+MemoryTier getMemoryTier(int64_t commitTimestamp, int64_t currentTimestamp) {
+    if (currentTimestamp == 0) {
+        currentTimestamp = static_cast<int64_t>(std::time(nullptr));
+    }
+    if (commitTimestamp <= 0 || commitTimestamp >= currentTimestamp) {
+        return MemoryTier::Hot;
+    }
+    int64_t age = currentTimestamp - commitTimestamp;
+    constexpr int64_t kOneYearSecs = 365LL * 86400LL;      // 31,536,000 s
+    constexpr int64_t kThirtyDaysSecs = 30LL * 86400LL;   // 2,592,000 s
+
+    if (age > kOneYearSecs) {
+        return MemoryTier::Cold;
+    } else if (age > kThirtyDaysSecs) {
+        return MemoryTier::Warm;
+    } else {
+        return MemoryTier::Hot;
+    }
+}
+
+SQ8Vector SQ8Vector::quantize(const std::vector<float>& vec) {
+    SQ8Vector sq;
+    if (vec.empty()) return sq;
+
+    sq.data.resize(vec.size());
+    float minV = vec[0];
+    float maxV = vec[0];
+    for (float v : vec) {
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+    }
+
+    sq.minVal = minV;
+    float range = maxV - minV;
+    if (range < 1e-8f) {
+        sq.scale = 1.0f;
+    } else {
+        sq.scale = range / 255.0f;
+    }
+
+    for (size_t i = 0; i < vec.size(); ++i) {
+        float normalized = (vec[i] - sq.minVal) / sq.scale;
+        int val = static_cast<int>(std::round(normalized)) - 128;
+        if (val < -128) val = -128;
+        if (val > 127) val = 127;
+        sq.data[i] = static_cast<int8_t>(val);
+    }
+
+    return sq;
+}
+
+std::vector<float> SQ8Vector::dequantize() const {
+    std::vector<float> vec(data.size());
+    for (size_t i = 0; i < data.size(); ++i) {
+        int unsignedVal = static_cast<int>(data[i]) + 128;
+        vec[i] = minVal + static_cast<float>(unsignedVal) * scale;
+    }
+    return vec;
+}
+
+size_t SQ8Vector::sizeBytes() const {
+    return data.size() * sizeof(int8_t) + sizeof(minVal) + sizeof(scale);
+}
+
 struct VectorIndex::Impl {
     std::unordered_map<std::string, hnswlib::labeltype> id_to_label;
     std::unordered_map<hnswlib::labeltype, std::string> label_to_id;
     std::unordered_map<hnswlib::labeltype, int64_t> timestamps;
+    std::unordered_map<hnswlib::labeltype, SQ8Vector> quantized_vectors;
     hnswlib::labeltype next_label = 0;
     
     hnswlib::L2Space* space;
@@ -63,25 +128,60 @@ VectorIndex::VectorIndex(const std::string& repoRoot) {
         std::string meta_path = (chronosDir / "vectors_meta.bin").string();
         if (fs::exists(meta_path)) {
             std::ifstream in(meta_path, std::ios::binary);
-            in.read(reinterpret_cast<char*>(&impl_->next_label), sizeof(impl_->next_label));
-            
-            size_t count = 0;
-            in.read(reinterpret_cast<char*>(&count), sizeof(count));
-            for (size_t i = 0; i < count; ++i) {
-                hnswlib::labeltype label;
-                in.read(reinterpret_cast<char*>(&label), sizeof(label));
-                
-                uint32_t idLen = 0;
-                in.read(reinterpret_cast<char*>(&idLen), sizeof(idLen));
-                std::string id(idLen, '\0');
-                in.read(id.data(), idLen);
-                
-                int64_t ts = 0;
-                in.read(reinterpret_cast<char*>(&ts), sizeof(ts));
-                
-                impl_->id_to_label[id] = label;
-                impl_->label_to_id[label] = id;
-                impl_->timestamps[label] = ts;
+            uint32_t magic = 0;
+            in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+            if (magic == 0x53513831) {
+                in.read(reinterpret_cast<char*>(&impl_->next_label), sizeof(impl_->next_label));
+                size_t count = 0;
+                in.read(reinterpret_cast<char*>(&count), sizeof(count));
+                for (size_t i = 0; i < count; ++i) {
+                    hnswlib::labeltype label;
+                    in.read(reinterpret_cast<char*>(&label), sizeof(label));
+                    
+                    uint32_t idLen = 0;
+                    in.read(reinterpret_cast<char*>(&idLen), sizeof(idLen));
+                    std::string id(idLen, '\0');
+                    in.read(id.data(), idLen);
+                    
+                    int64_t ts = 0;
+                    in.read(reinterpret_cast<char*>(&ts), sizeof(ts));
+                    
+                    SQ8Vector sq;
+                    in.read(reinterpret_cast<char*>(&sq.minVal), sizeof(sq.minVal));
+                    in.read(reinterpret_cast<char*>(&sq.scale), sizeof(sq.scale));
+                    uint32_t dataLen = 0;
+                    in.read(reinterpret_cast<char*>(&dataLen), sizeof(dataLen));
+                    sq.data.resize(dataLen);
+                    if (dataLen > 0) {
+                        in.read(reinterpret_cast<char*>(sq.data.data()), dataLen);
+                    }
+
+                    impl_->id_to_label[id] = label;
+                    impl_->label_to_id[label] = id;
+                    impl_->timestamps[label] = ts;
+                    impl_->quantized_vectors[label] = std::move(sq);
+                }
+            } else {
+                in.seekg(0, std::ios::beg);
+                in.read(reinterpret_cast<char*>(&impl_->next_label), sizeof(impl_->next_label));
+                size_t count = 0;
+                in.read(reinterpret_cast<char*>(&count), sizeof(count));
+                for (size_t i = 0; i < count; ++i) {
+                    hnswlib::labeltype label;
+                    in.read(reinterpret_cast<char*>(&label), sizeof(label));
+                    
+                    uint32_t idLen = 0;
+                    in.read(reinterpret_cast<char*>(&idLen), sizeof(idLen));
+                    std::string id(idLen, '\0');
+                    in.read(id.data(), idLen);
+                    
+                    int64_t ts = 0;
+                    in.read(reinterpret_cast<char*>(&ts), sizeof(ts));
+                    
+                    impl_->id_to_label[id] = label;
+                    impl_->label_to_id[label] = id;
+                    impl_->timestamps[label] = ts;
+                }
             }
         }
     }
@@ -94,6 +194,8 @@ VectorIndex::~VectorIndex() {
     meta_path.replace(meta_path.find("vectors.bin"), 11, "vectors_meta.bin");
     std::ofstream out(meta_path, std::ios::binary | std::ios::trunc);
     
+    uint32_t magic = 0x53513831;
+    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&impl_->next_label), sizeof(impl_->next_label));
     size_t count = impl_->id_to_label.size();
     out.write(reinterpret_cast<const char*>(&count), sizeof(count));
@@ -106,12 +208,25 @@ VectorIndex::~VectorIndex() {
         
         int64_t ts = impl_->timestamps[label];
         out.write(reinterpret_cast<const char*>(&ts), sizeof(ts));
+
+        const auto& sq = impl_->quantized_vectors[label];
+        out.write(reinterpret_cast<const char*>(&sq.minVal), sizeof(sq.minVal));
+        out.write(reinterpret_cast<const char*>(&sq.scale), sizeof(sq.scale));
+        uint32_t dataLen = static_cast<uint32_t>(sq.data.size());
+        out.write(reinterpret_cast<const char*>(&dataLen), sizeof(dataLen));
+        if (dataLen > 0) {
+            out.write(reinterpret_cast<const char*>(sq.data.data()), dataLen);
+        }
     }
     
     delete impl_;
 }
 
 void VectorIndex::upsert(const EmbeddingRecord& rec) {
+    if (rec.tier == MemoryTier::Cold) {
+        return; // Skip vector insertion for Cold Tier commits (> 1 year old)
+    }
+
     if (impl_->alg_hnsw->cur_element_count >= impl_->alg_hnsw->max_elements_) {
         // Prevent OOM on constrained test environments
         if (impl_->alg_hnsw->max_elements_ < 800000) {
@@ -134,7 +249,11 @@ void VectorIndex::upsert(const EmbeddingRecord& rec) {
     }
     
     impl_->timestamps[label] = rec.timestamp;
-    impl_->alg_hnsw->addPoint(rec.vector.data(), label);
+    SQ8Vector sq = SQ8Vector::quantize(rec.vector);
+    impl_->quantized_vectors[label] = sq;
+
+    std::vector<float> deq = sq.dequantize();
+    impl_->alg_hnsw->addPoint(deq.data(), label);
 }
 
 void VectorIndex::remove(const std::string& nodeId) {
@@ -144,7 +263,16 @@ void VectorIndex::remove(const std::string& nodeId) {
         impl_->id_to_label.erase(nodeId);
         impl_->label_to_id.erase(label);
         impl_->timestamps.erase(label);
+        impl_->quantized_vectors.erase(label);
     }
+}
+
+size_t VectorIndex::size() const {
+    return impl_->id_to_label.size();
+}
+
+bool VectorIndex::contains(const std::string& nodeId) const {
+    return impl_->id_to_label.count(nodeId) > 0;
 }
 
 std::vector<SeedMatch> VectorIndex::search(const std::vector<float>& queryVector, int topK, int64_t queryTimestamp) const {

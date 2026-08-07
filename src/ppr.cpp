@@ -20,9 +20,14 @@ std::string resolveAlias(sqlite3* db, const std::string& id) {
 }
 } // namespace
 
-std::vector<std::pair<std::string, double>> PPREngine::outEdges(const std::string& nodeId) {
-    std::vector<std::pair<std::string, double>> edges;
-    sqlite3_stmt* stmt;
+const PPREngine::CachedNode& PPREngine::getCachedNode(const std::string& nodeId) {
+    auto it = adjacencyCache_.find(nodeId);
+    if (it != adjacencyCache_.end()) {
+        return it->second;
+    }
+
+    CachedNode cached;
+    sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(db_,
         "SELECT target_id, probable_target_weight FROM edges WHERE source_id = ?1;",
         -1, &stmt, nullptr);
@@ -31,26 +36,48 @@ std::vector<std::pair<std::string, double>> PPREngine::outEdges(const std::strin
         std::string target = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         double weight = sqlite3_column_double(stmt, 1);
         target = resolveAlias(db_, target);
-        edges.emplace_back(target, weight);
+        cached.edges.emplace_back(target, weight);
+        cached.outWeightSum += weight;
     }
     sqlite3_finalize(stmt);
-    return edges;
+
+    auto [insertedIt, success] = adjacencyCache_.emplace(nodeId, std::move(cached));
+    return insertedIt->second;
+}
+
+std::vector<std::pair<std::string, double>> PPREngine::outEdges(const std::string& nodeId) {
+    return getCachedNode(nodeId).edges;
 }
 
 // Andersen-Chung-Lang local push (approximate PPR). Maintains a probability
-// mass `p` (settled score) and residual mass `r` per node. Repeatedly picks
-// a node whose residual/out-degree exceeds epsilon and pushes: keeps alpha
-// share for itself, distributes (1-alpha) share to neighbors weighted by
-// PROBABLE_TARGET usage weight. Bounded by nodeBudget nodes touched, which
-// keeps this safely under the Spec §9 <1s query budget even on dense graphs.
-PPRScoreMap PPREngine::localPush(const std::string& seedId, double alpha,
+// mass `p` (settled score) and residual mass `r` per node.
+// Strictly enforces push condition: r(u) >= epsilon * d_out(u).
+// Multi-seed initialization splits initial residual 1.0 equally across seeds.
+PPRScoreMap PPREngine::localPush(const std::vector<std::string>& seeds, double alpha,
                                   double epsilon, int nodeBudget) {
     std::unordered_map<std::string, double> p; // settled score
     std::unordered_map<std::string, double> r; // residual
-    r[seedId] = 1.0;
 
-    std::deque<std::string> queue{seedId};
-    std::unordered_map<std::string, bool> queued{{seedId, true}};
+    if (seeds.empty()) {
+        return PPRScoreMap{};
+    }
+
+    double initialMass = 1.0 / static_cast<double>(seeds.size());
+    std::deque<std::string> queue;
+    std::unordered_map<std::string, bool> queued;
+
+    for (const auto& seedId : seeds) {
+        r[seedId] += initialMass;
+        if (!queued[seedId]) {
+            const auto& nodeInfo = getCachedNode(seedId);
+            double d_out = nodeInfo.outWeightSum > 0.0 ? nodeInfo.outWeightSum : 1.0;
+            if (r[seedId] >= epsilon * d_out) {
+                queue.push_back(seedId);
+                queued[seedId] = true;
+            }
+        }
+    }
+
     int touched = 0;
 
     while (!queue.empty() && touched < nodeBudget) {
@@ -58,25 +85,28 @@ PPRScoreMap PPREngine::localPush(const std::string& seedId, double alpha,
         queue.pop_front();
         queued[u] = false;
 
-        auto neighbors = outEdges(u);
-        double outWeightSum = 0.0;
-        for (auto& [t, w] : neighbors) outWeightSum += w;
-        if (outWeightSum <= 0.0) outWeightSum = 1.0; // dangling node guard
+        const auto& nodeInfo = getCachedNode(u);
+        double d_out_u = nodeInfo.outWeightSum > 0.0 ? nodeInfo.outWeightSum : 1.0;
 
         double residual = r[u];
-        if (residual <= 0.0) continue;
-        if (neighbors.empty() && residual / 1.0 < epsilon) continue;
+        // Strictly enforce Andersen-style local-push condition r(u) >= epsilon * d_out(u)
+        if (residual < epsilon * d_out_u) {
+            continue;
+        }
 
         p[u] += alpha * residual;
         double pushMass = (1.0 - alpha) * residual;
         r[u] = 0.0;
         ++touched;
 
-        for (auto& [target, weight] : neighbors) {
-            double share = pushMass * (weight / outWeightSum);
+        for (const auto& [target, weight] : nodeInfo.edges) {
+            double share = pushMass * (weight / d_out_u);
             r[target] += share;
-            double targetDegreeApprox = std::max<size_t>(1, outEdges(target).size());
-            if (r[target] / targetDegreeApprox >= epsilon && !queued[target] &&
+
+            const auto& targetInfo = getCachedNode(target);
+            double d_out_target = targetInfo.outWeightSum > 0.0 ? targetInfo.outWeightSum : 1.0;
+
+            if (r[target] >= epsilon * d_out_target && !queued[target] &&
                 touched + static_cast<int>(queue.size()) < nodeBudget) {
                 queue.push_back(target);
                 queued[target] = true;
@@ -85,28 +115,28 @@ PPRScoreMap PPREngine::localPush(const std::string& seedId, double alpha,
     }
 
     PPRScoreMap result;
-    result.nodeIdToScore = p;
+    result.nodeIdToScore = std::move(p);
     return result;
 }
 
-PPRScoreMap PPREngine::dualHorizonPush(const std::string& seedId, int nodeBudget) {
-    // Tight horizon: high alpha => mass stays close to the seed (diagnostic:
-    // "what does X directly call/get called by").
-    PPRScoreMap tight = localPush(seedId, /*alpha=*/0.5, /*epsilon=*/1e-4, nodeBudget);
-    // Wide horizon: low alpha => mass spreads further through the graph
-    // (architectural: "how does X fit into the wider system").
-    PPRScoreMap wide = localPush(seedId, /*alpha=*/0.1, /*epsilon=*/1e-5, nodeBudget);
+PPRScoreMap PPREngine::dualHorizonPush(const std::vector<std::string>& seeds, int nodeBudget) {
+    // Tight horizon: high alpha (0.5) => mass stays close to seeds
+    PPRScoreMap tight = localPush(seeds, /*alpha=*/0.5, /*epsilon=*/1e-4, nodeBudget);
+    // Wide horizon: low alpha (0.1) => mass spreads further through graph
+    PPRScoreMap wide = localPush(seeds, /*alpha=*/0.1, /*epsilon=*/1e-5, nodeBudget);
 
     auto toSortedVec = [](const PPRScoreMap& m) {
         std::vector<std::pair<std::string, double>> v(m.nodeIdToScore.begin(), m.nodeIdToScore.end());
-        std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.second > b.second; });
+        std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
         return v;
     };
 
     auto fused = reciprocalRankFusion(toSortedVec(tight), toSortedVec(wide));
 
     PPRScoreMap out;
-    for (auto& [id, score] : fused) out.nodeIdToScore[id] = score;
+    for (const auto& [id, score] : fused) {
+        out.nodeIdToScore[id] = score;
+    }
     return out;
 }
 
