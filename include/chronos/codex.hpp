@@ -84,6 +84,7 @@ public:
     // --- Temporal ---
     void recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg);
     std::vector<HistoryRecord> getHistory(const std::string& nodeId);
+    std::vector<HistoryRecord> getHistoryForFile(const std::string& filePath);
 
     // --- Transactions ---
     void beginTransaction();

@@ -4,6 +4,7 @@
 #include <sstream>
 #include <random>
 #include <filesystem>
+#include <chrono>
 
 #if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
 extern "C" {
@@ -131,7 +132,7 @@ void collectTokens(TSNode node, std::vector<StructuralToken>& out) {
 
 void walk(TSNode node, const std::string& source, std::vector<FunctionSpan>& spans) {
     std::string type(ts_node_type(node));
-    if (type == "function_definition") {
+    if (type == "function_definition" || type == "class_specifier" || type == "struct_specifier" || type == "class_definition") {
         FunctionSpan span;
         span.byteStart = ts_node_start_byte(node);
         span.byteEnd = ts_node_end_byte(node);
@@ -139,7 +140,10 @@ void walk(TSNode node, const std::string& source, std::vector<FunctionSpan>& spa
         extractCalls(node, source, span.outgoingCalls);
         collectTokens(node, span.tokens);
         spans.push_back(std::move(span));
-        return; // don't descend into nested lambdas as separate top-level nodes for v1
+        
+        // Only return if it's a leaf structure to prevent over-nesting, but we want methods inside classes!
+        // So for classes, we should keep walking to find nested methods.
+        if (type == "function_definition") return;
     }
     uint32_t n = ts_node_child_count(node);
     for (uint32_t i = 0; i < n; ++i) walk(ts_node_child(node, i), source, spans);
@@ -147,16 +151,16 @@ void walk(TSNode node, const std::string& source, std::vector<FunctionSpan>& spa
 }
 #endif
 
-void AstIndexer::indexFile(const std::string& relativePath, const std::string& commitHash) {
+void AstIndexer::indexFile(const std::string& relativePath, const std::string& commitHash, int64_t timestamp) {
     std::string fullPath = (fs::path(repoRoot_) / relativePath).string();
     if (!fs::exists(fullPath)) { removeFile(relativePath); return; }
 
     std::ifstream in(fullPath, std::ios::binary);
     std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    indexBuffer(source, relativePath, commitHash);
+    indexBuffer(source, relativePath, commitHash, timestamp);
 }
 
-std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash) {
+std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash, int64_t timestamp) {
     std::vector<std::string> processedNodes;
     ++stats_.filesProcessed;
     if (source.empty()) { removeFile(relativePath); return processedNodes; }
@@ -225,7 +229,13 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
                     }
 
                     std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
-                    vectors_.upsert({nodeId, embedText(snippet)});
+                    
+                    int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    bool isColdTier = (timestamp > 0) && ((now - timestamp) > 31536000); // 1 year
+                    
+                    if (!isColdTier) {
+                        vectors_.upsert({nodeId, embedText(snippet), timestamp});
+                    }
                     ++stats_.nodesUpserted;
                 }
 
@@ -315,7 +325,12 @@ degrade:
         n.parse_confidence = 0.0f;
         codex_.upsertNode(n);
         ++stats_.nodesUpserted;
-        vectors_.upsert({n.id, embedText(source)});
+        
+        int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        bool isColdTier = (timestamp > 0) && ((now - timestamp) > 31536000); // 1 year
+        if (!isColdTier) {
+            vectors_.upsert({n.id, embedText(source), timestamp});
+        }
 
         processedNodes.push_back(n.id);
         return processedNodes;

@@ -24,6 +24,30 @@ set(USE_SSH OFF CACHE BOOL "Disable libssh2" FORCE)
 set(USE_HTTPS OFF CACHE BOOL "Disable HTTPS" FORCE)
 FetchContent_MakeAvailable(libgit2)
 
+# hnswlib for vector quantization and HNSW index
+FetchContent_Declare(
+  hnswlib
+  GIT_REPOSITORY https://github.com/nmslib/hnswlib.git
+  GIT_TAG        v0.8.0
+)
+FetchContent_MakeAvailable(hnswlib)
+
+# nlohmann_json for LLM API parsing
+FetchContent_Declare(
+  json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG        v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
+# cpp-httplib for communicating with local Ollama daemon
+FetchContent_Declare(
+  httplib
+  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG        v0.15.3
+)
+FetchContent_MakeAvailable(httplib)
+
 # tree-sitter core + C++ grammar are pulled in as a git submodule / system lib.
 # We link against libtree-sitter and libtree-sitter-cpp if present; the code
 # degrades to "parse_confidence = 0" nodes if the grammar lib is missing so
@@ -49,8 +73,8 @@ add_library(chronos_core
   src/git_indexer.cpp
 )
 
-target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include)
-target_link_libraries(chronos_core PUBLIC ${SQLITE3_LIBRARIES} Threads::Threads libgit2package)
+target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include ${hnswlib_SOURCE_DIR})
+target_link_libraries(chronos_core PUBLIC ${SQLITE3_LIBRARIES} Threads::Threads libgit2package hnswlib nlohmann_json::nlohmann_json httplib::httplib)
 
 if(TREE_SITTER_LIB)
   if(TREE_SITTER_CPP_LIB)

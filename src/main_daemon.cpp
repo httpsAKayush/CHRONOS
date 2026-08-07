@@ -24,6 +24,7 @@
 #include "chronos/ipc.hpp"
 #include "chronos/codex.hpp"
 #include "chronos/oracle.hpp"
+#include "chronos/env.hpp"
 
 using namespace chronos;
 using namespace std::chrono_literals;
@@ -38,12 +39,6 @@ constexpr auto kIdleTimeout = 15min; // FR-5
 // Spec's "strictly local, no network exposure" constraint (the socket
 // itself never leaves loopback).
 std::string openAiChatBlocking(const std::string& systemPrompt, const std::string& userQuery) {
-    const char* apiKey = std::getenv("OPENAI_API_KEY");
-    if (!apiKey) {
-        std::cerr << "chronos-daemon: OPENAI_API_KEY environment variable not set. Falling back to Oracle-Only.\n";
-        return "";
-    }
-
     std::string escapedSys, escapedUser;
     for (char c : systemPrompt) {
         if (c == '"' || c == '\\') escapedSys += '\\';
@@ -56,17 +51,34 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
         else escapedUser += c;
     }
 
-    std::string body = "{\"model\":\"gpt-4o-mini\",\"messages\":["
+    const char* sysKey = std::getenv("OPENROUTER_API_KEY");
+    if (!sysKey) sysKey = std::getenv("OPENAI_API_KEY");
+    const char* apiKey = sysKey ? sysKey : "";
+
+    if (!apiKey[0]) {
+        std::cerr << "chronos-daemon: No API key environment variable set. Falling back to Oracle-Only.\n";
+        return "";
+    }
+
+    std::string body = "{\"model\":\"openai/gpt-4o\",\"max_tokens\":1000,\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
 
-    std::string cmd = "curl -s https://api.openai.com/v1/chat/completions "
+    std::string tmpFile = "/tmp/chronos_daemon_req.json";
+    {
+        std::ofstream out(tmpFile);
+        out << body;
+    }
+
+    std::string cmd = "curl -s https://openrouter.ai/api/v1/chat/completions "
                       "-H \"Content-Type: application/json\" "
                       "-H \"Authorization: Bearer " + std::string(apiKey) + "\" "
-                      "-d '" + body + "'";
+                      "-d @" + tmpFile;
 
     FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return "";
+    if (!pipe) {
+        return "";
+    }
 
     char buffer[128];
     std::string result = "";
@@ -75,6 +87,11 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
             result += buffer;
     }
     pclose(pipe);
+    
+    std::ofstream outResp("/tmp/chronos_daemon_resp.json");
+    outResp << result;
+    outResp.close();
+    
     return result;
 }
 
@@ -115,6 +132,11 @@ int main(int argc, char** argv) {
     }
     std::string repoRoot = argv[1];
     ::signal(SIGPIPE, SIG_IGN); // Spec §18: EPIPE on client interrupt must not kill the daemon
+
+    auto env = loadEnv(repoRoot);
+    for (const auto& [k, v] : env) {
+        setenv(k.c_str(), v.c_str(), 1);
+    }
 
     Codex codex(repoRoot);
     Oracle oracle(codex, repoRoot);

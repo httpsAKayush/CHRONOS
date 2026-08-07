@@ -4,12 +4,18 @@ void run_simhash_tests();
 void run_codex_alias_tests();
 void run_mmr_tests();
 void run_oracle_harness_tests();
+void run_recency_tests();
+void run_ast_mutation_scorer_tests();
+void run_staging_check_tests();
 
 int main() {
     run_simhash_tests();
     run_codex_alias_tests();
     run_mmr_tests();
     run_oracle_harness_tests();
+    run_recency_tests();
+    run_ast_mutation_scorer_tests();
+    run_staging_check_tests();
 
     if (g_failures == 0) {
         std::cout << "All Chronos tests passed.\n";

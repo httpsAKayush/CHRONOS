@@ -89,12 +89,6 @@ void Codex::migrate() {
         CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
         CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 
-        CREATE TABLE IF NOT EXISTS history (
-            node_id        TEXT NOT NULL REFERENCES nodes(id),
-            commit_hash    TEXT NOT NULL,
-            intent_summary TEXT NOT NULL,
-            PRIMARY KEY (node_id, commit_hash)
-        );
 
         -- Path-compressed alias DAG (union-find). `root_id` is maintained
         -- eagerly on write so resolveAlias is a single indexed lookup.
@@ -118,6 +112,9 @@ void Codex::migrate() {
 }
 
 void Codex::upsertNode(const Node& n) {
+    if (n.byte_end <= n.byte_start) {
+        throw std::invalid_argument("byte_end must be strictly greater than byte_start");
+    }
     static const char* sql = R"SQL(
         INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -178,9 +175,9 @@ void Codex::upsertEdge(const Edge& e) {
 
 void Codex::appendHistory(const HistoryEntry& h) {
     static const char* sql = R"SQL(
-        INSERT INTO history (node_id, commit_hash, intent_summary)
-        VALUES (?1, ?2, ?3)
-        ON CONFLICT(node_id, commit_hash) DO UPDATE SET intent_summary = excluded.intent_summary;
+        INSERT INTO history (node_id, commit_hash, timestamp, synthetic_msg)
+        VALUES (?1, ?2, 0, ?3)
+        ON CONFLICT(node_id, commit_hash) DO UPDATE SET synthetic_msg = excluded.synthetic_msg;
     )SQL";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -256,6 +253,29 @@ std::vector<Codex::HistoryRecord> Codex::getHistory(const std::string& nodeId) {
         "WHERE node_id = ?1 ORDER BY timestamp DESC;",
         -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    
+    std::vector<Codex::HistoryRecord> records;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        HistoryRecord rec;
+        rec.nodeId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        rec.commitHash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        rec.timestamp = sqlite3_column_int64(stmt, 2);
+        const char* msg = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        if (msg) rec.syntheticMsg = msg;
+        records.push_back(rec);
+    }
+    sqlite3_finalize(stmt);
+    return records;
+}
+
+std::vector<Codex::HistoryRecord> Codex::getHistoryForFile(const std::string& filePath) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_,
+        "SELECT h.node_id, h.commit_hash, h.timestamp, h.synthetic_msg "
+        "FROM history h JOIN nodes n ON h.node_id = n.id "
+        "WHERE n.file_path = ?1 AND n.is_active = 1 ORDER BY h.timestamp DESC;",
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, filePath.c_str(), -1, SQLITE_TRANSIENT);
     
     std::vector<Codex::HistoryRecord> records;
     while (sqlite3_step(stmt) == SQLITE_ROW) {

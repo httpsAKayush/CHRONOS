@@ -23,6 +23,13 @@ if [ -z "$CHANGED" ] && [ -z "$DELETED" ]; then
   exit 0
 fi
 
+# Execute Staging Area Check for Temporal Collision Warnings
+if command -v chronos >/dev/null 2>&1; then
+  chronos check-staging "$REPO_ROOT" || true
+elif [ -x "$REPO_ROOT/build/chronos" ]; then
+  "$REPO_ROOT/build/chronos" check-staging "$REPO_ROOT" || true
+fi
+
 if ! command -v chronos-indexer >/dev/null 2>&1; then
   # Fail-open: no indexer binary available, don't block the developer.
   exit 0

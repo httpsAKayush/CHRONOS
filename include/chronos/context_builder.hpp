@@ -28,7 +28,8 @@ public:
     // "LanceDB cannot find a high-confidence seed -> TUI informs the user to
     // rephrase rather than hallucinating."
     BuildResult build(const std::string& userQuery, int pprBudget = 40,
-                       int contextNodeBudget = 10, float seedConfidenceFloor = 0.05f);
+                       int contextNodeBudget = 10, float seedConfidenceFloor = 0.05f,
+                       int64_t queryTimestamp = 0);
 
 private:
     Codex& codex_;

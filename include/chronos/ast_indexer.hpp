@@ -41,10 +41,14 @@ public:
     // and call codex.recordAlias(oldId, newId, commitHash) instead of
     // creating a fresh disconnected node — this is what lets `login` queries
     // keep resolving to `signIn` after the rename (Spec §13 concrete test).
-    void indexFile(const std::string& relativePath, const std::string& commitHash = "LIVE");
+    // Reads a file from disk, hashes it, and indexes any new/changed functions.
+    // If commitHash is provided, associates the nodes/edges with that commit.
+    void indexFile(const std::string& relativePath, const std::string& commitHash = "", int64_t timestamp = 0);
 
-    // Parses a raw memory buffer (used by GitIndexer for historical commits)
-    std::vector<std::string> indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash);
+    // Indexes from an in-memory buffer directly. Useful for integration tests
+    // or when the file content is already available (e.g. from libgit2).
+    // Returns the list of Node IDs processed in this buffer.
+    std::vector<std::string> indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash = "", int64_t timestamp = 0);
 
     // Marks all nodes previously recorded for `relativePath` inactive; used
     // when a file is deleted (Spec §8 edge case).

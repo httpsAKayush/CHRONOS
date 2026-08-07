@@ -37,12 +37,13 @@ std::string ContextBuilder::readLiveSnippet(const Node& n) const {
 }
 
 BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
-                                   int contextNodeBudget, float seedConfidenceFloor) {
+                                   int contextNodeBudget, float seedConfidenceFloor,
+                                   int64_t queryTimestamp) {
     BuildResult result;
 
     // --- Hop 1: LanceDB(VectorIndex) semantic seed ---
     auto queryVec = embedText(userQuery);
-    auto seeds = vectors_.search(queryVec, /*topK=*/5);
+    auto seeds = vectors_.search(queryVec, /*topK=*/5, queryTimestamp);
     if (seeds.empty() || seeds.front().score < seedConfidenceFloor) {
         result.ok = false;
         result.reason =
@@ -55,9 +56,16 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
     result.rawTrace = trace;
 
     if (trace.nodes.empty()) {
-        result.ok = false;
-        result.reason = "Found a semantic match but it has no recorded structural edges yet.";
-        return result;
+        // Fallback: If no structural edges exist, we should still use the raw semantic seed
+        // rather than hallucinating or aborting (Graceful degradation).
+        auto fallbackNode = codex_.getNode(seeds.front().nodeId);
+        if (fallbackNode) {
+            trace.nodes.push_back(*fallbackNode);
+        } else {
+            result.ok = false;
+            result.reason = "Found a semantic match but the node was missing from the codex.";
+            return result;
+        }
     }
 
     // --- Connectivity-based MMR pruning to the context node budget ---

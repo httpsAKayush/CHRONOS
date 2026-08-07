@@ -15,6 +15,13 @@
 #include <cstdlib>
 #include <thread>
 #include <chrono>
+#include <vector>
+#include <map>
+#include <set>
+#include <unordered_set>
+#include <cctype>
+#include <algorithm>
+#include <sstream>
 #include "chronos/codex.hpp"
 #include "chronos/vector_index.hpp"
 #include "chronos/context_builder.hpp"
@@ -22,6 +29,8 @@
 #include "chronos/git_indexer.hpp"
 #include "chronos/ipc.hpp"
 #include "chronos/ast_indexer.hpp"
+#include "chronos/ast_mutation_scorer.hpp"
+#include "chronos/env.hpp"
 
 namespace fs = std::filesystem;
 using namespace chronos;
@@ -200,15 +209,183 @@ int cmdTimeline(const std::string& repoRoot, const std::string& target) {
     return 0;
 }
 
+static std::string execCmdOutput(const std::string& cmd) {
+    std::string result;
+    char buffer[512];
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+    return result;
+}
+
+static bool checkStagingCollision(const std::string& stagedLine, const std::string& syntheticMsg) {
+    if (syntheticMsg.empty()) return false;
+
+    std::string lineLower = stagedLine;
+    std::string msgLower = syntheticMsg;
+    std::transform(lineLower.begin(), lineLower.end(), lineLower.begin(), ::tolower);
+    std::transform(msgLower.begin(), msgLower.end(), msgLower.begin(), ::tolower);
+
+    static const std::vector<std::string> domainKeywords = {
+        "mutex", "lock", "lock_guard", "unique_lock", "timeout", "sleep", 
+        "thread", "deadlock", "critical", "hazard", "atomic", "volatile", "race"
+    };
+
+    auto matchesKeywordWordBoundary = [](const std::string& text, const std::string& kw) {
+        size_t pos = 0;
+        while ((pos = text.find(kw, pos)) != std::string::npos) {
+            bool leftOk = (pos == 0) || !std::isalnum(static_cast<unsigned char>(text[pos - 1]));
+            if (leftOk) {
+                return true;
+            }
+            pos += 1;
+        }
+        return false;
+    };
+
+    for (const auto& kw : domainKeywords) {
+        if (matchesKeywordWordBoundary(msgLower, kw) && matchesKeywordWordBoundary(lineLower, kw)) {
+            return true;
+        }
+    }
+
+    auto tokenize = [](const std::string& text) {
+        std::vector<std::string> tokens;
+        std::string current;
+        for (char c : text) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+                current += c;
+            } else {
+                if (!current.empty()) {
+                    tokens.push_back(current);
+                    current.clear();
+                }
+            }
+        }
+        if (!current.empty()) tokens.push_back(current);
+        return tokens;
+    };
+
+    auto msgTokens = tokenize(msgLower);
+    auto lineTokens = tokenize(lineLower);
+
+    static const std::unordered_set<std::string> stopWords = {
+        "a", "an", "the", "in", "on", "at", "to", "for", "of", "with", "and", "or",
+        "is", "are", "was", "were", "this", "that", "it", "by", "from", "as", "be",
+        "has", "have", "had", "do", "not", "here", "causes", "should", "must", "can"
+    };
+
+    for (const auto& mTok : msgTokens) {
+        if (mTok.length() < 3 || stopWords.count(mTok)) continue;
+        for (const auto& lTok : lineTokens) {
+            if (lTok == mTok) return true;
+        }
+    }
+
+    return false;
+}
+
+int cmdCheckStaging(const std::string& repoRoot, bool strictMode = false) {
+    fs::path chronosDb = fs::path(repoRoot) / ".chronos" / "codex.db";
+    if (!fs::exists(chronosDb)) {
+        return 0;
+    }
+
+    std::string diffCmd = "git -C \"" + repoRoot + "\" diff --cached -U3 2>/dev/null";
+    std::string diffOutput = execCmdOutput(diffCmd);
+    if (diffOutput.empty()) {
+        return 0;
+    }
+
+    std::map<std::string, std::vector<std::string>> stagedAdditions;
+    std::stringstream ss(diffOutput);
+    std::string line;
+    std::string currentFile;
+
+    while (std::getline(ss, line)) {
+        if (line.rfind("diff --git", 0) == 0) {
+            currentFile.clear();
+        } else if (line.rfind("+++ ", 0) == 0) {
+            std::string path = line.substr(4);
+            if (path.rfind("b/", 0) == 0) {
+                path = path.substr(2);
+            }
+            if (path != "/dev/null") {
+                if (!path.empty() && path.back() == '\r') path.pop_back();
+                currentFile = path;
+            } else {
+                currentFile.clear();
+            }
+        } else if (!currentFile.empty() && !line.empty() && line[0] == '+' && line.rfind("+++", 0) != 0) {
+            if (line.back() == '\r') line.pop_back();
+            stagedAdditions[currentFile].push_back(line);
+        }
+    }
+
+    Codex codex(repoRoot);
+    int collisionCount = 0;
+    std::set<std::tuple<std::string, std::string, std::string>> reported;
+
+    for (const auto& [filePath, addedLines] : stagedAdditions) {
+        auto history = codex.getHistoryForFile(filePath);
+        if (history.empty()) {
+            std::string normPath = fs::path(filePath).lexically_normal().string();
+            if (normPath != filePath) {
+                history = codex.getHistoryForFile(normPath);
+            }
+        }
+
+        if (history.empty()) continue;
+
+        for (const auto& stagedLine : addedLines) {
+            for (const auto& rec : history) {
+                if (rec.syntheticMsg.empty()) continue;
+                if (checkStagingCollision(stagedLine, rec.syntheticMsg)) {
+                    std::tuple<std::string, std::string, std::string> key = {filePath, stagedLine, rec.commitHash};
+                    if (reported.count(key)) continue;
+                    reported.insert(key);
+
+                    std::string shortHash = rec.commitHash.substr(0, std::min<size_t>(7, rec.commitHash.length()));
+
+                    std::cout << "================================================================================\n";
+                    std::cout << "[TEMPORAL COLLISION WARNING]\n";
+                    std::cout << "File: " << filePath << "\n";
+                    std::cout << "Staged Modification:\n";
+                    std::cout << "  " << stagedLine << "\n";
+                    std::cout << "Historical Constraint Violation:\n";
+                    std::cout << "  - Commit " << shortHash << ": \"" << rec.syntheticMsg << "\"\n";
+                    std::cout << "Action: Please review historical constraint before committing.\n";
+                    std::cout << "================================================================================\n";
+
+                    collisionCount++;
+                }
+            }
+        }
+    }
+
+    if (strictMode && collisionCount > 0) {
+        return 1;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: chronos <init|ask|sync|trace> [args]\n";
+        std::cerr << "usage: chronos <init|ask|sync|trace|timeline|check-staging> [args]\n";
         return 2;
     }
     std::string cmd = argv[1];
     std::string repoRoot = fs::current_path().string();
+
+    auto env = loadEnv(repoRoot);
+    for (const auto& [k, v] : env) {
+        setenv(k.c_str(), v.c_str(), 1);
+    }
 
     if (cmd == "init") return cmdInit(repoRoot);
     if (cmd == "sync") return cmdSync(repoRoot);
@@ -223,6 +400,19 @@ int main(int argc, char** argv) {
     if (cmd == "timeline") {
         if (argc < 3) { std::cerr << "usage: chronos timeline <target>\n"; return 2; }
         return cmdTimeline(repoRoot, argv[2]);
+    }
+    if (cmd == "check-staging") {
+        std::string targetRepo = repoRoot;
+        bool strict = false;
+        for (int i = 2; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--strict") {
+                strict = true;
+            } else if (arg[0] != '-') {
+                targetRepo = arg;
+            }
+        }
+        return cmdCheckStaging(targetRepo, strict);
     }
 
     std::cerr << "unknown command: " << cmd << "\n";
