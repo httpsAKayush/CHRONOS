@@ -3,6 +3,11 @@
 .chronos/
 # Ignore build directories and compiled output
 build/
+build/*.txt
+build/*.cmake
+build/_deps
+build/CMakeFiles/
+build/tests/
 .chronos/
 *.o
 *.so
@@ -13,3 +18,4 @@ build/
 .env
 
 .agents/
+tests/
