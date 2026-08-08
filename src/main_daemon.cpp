@@ -10,7 +10,9 @@
 // constraint) to avoid bloat/latency tax. This daemon is a thin, stateless
 // relay + policy layer between the Codex-derived context and that process.
 
+#include "chronos/llm_config.hpp"
 #include <iostream>
+#include <fstream>
 #include <chrono>
 #include <thread>
 #include <atomic>
@@ -53,33 +55,13 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
     std::string escapedSys = escape(systemPrompt);
     std::string escapedUser = escape(userQuery);
 
-    const char* orKey = std::getenv("OPENROUTER_API_KEY");
-    const char* oaKey = std::getenv("OPENAI_API_KEY");
-    const char* kmKey = std::getenv("KIMI_API_KEY");
-    
-    std::string apiKey;
-    std::string apiUrl;
-    std::string modelName = "gpt-4o";
-    
-    if (kmKey && kmKey[0]) {
-        apiKey = kmKey;
-        apiUrl = "https://api.tokenrouter.com/v1/chat/completions";
-        modelName = "moonshotai/kimi-k3-free";
-    } else if (orKey && orKey[0]) {
-        apiKey = orKey;
-        apiUrl = "https://openrouter.ai/api/v1/chat/completions";
-        modelName = "meta-llama/llama-3.1-8b-instruct:free";
-    } else if (oaKey && oaKey[0]) {
-        apiKey = oaKey;
-        apiUrl = "https://api.openai.com/v1/chat/completions";
-    }
-
-    if (apiKey.empty()) {
+    LlmConfig config = loadLlmConfig();
+    if (!config.isValid()) {
         std::cerr << "chronos-daemon: No API key environment variable set. Falling back to Oracle-Only.\n";
         return "";
     }
 
-    std::string body = "{\"model\":\"" + modelName + "\",\"max_tokens\":4096,\"messages\":["
+    std::string body = "{\"model\":\"" + config.modelName + "\",\"max_tokens\":4096,\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
 
@@ -89,9 +71,9 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
         out << body;
     }
 
-    std::string cmd = "curl -s " + apiUrl + " "
+    std::string cmd = "curl -s " + config.apiUrl + " "
                       "-H \"Content-Type: application/json\" "
-                      "-H \"Authorization: Bearer " + apiKey + "\" "
+                      "-H \"Authorization: Bearer " + config.apiKey + "\" "
                       "-d @" + tmpFile;
 
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -157,33 +139,13 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
     std::string escapedSys = escape(systemPrompt);
     std::string escapedUser = escape(userQuery);
 
-    const char* orKey = std::getenv("OPENROUTER_API_KEY");
-    const char* oaKey = std::getenv("OPENAI_API_KEY");
-    const char* kmKey = std::getenv("KIMI_API_KEY");
-    
-    std::string apiKey;
-    std::string apiUrl;
-    std::string modelName = "gpt-4o";
-    
-    if (kmKey && kmKey[0]) {
-        apiKey = kmKey;
-        apiUrl = "https://api.tokenrouter.com/v1/chat/completions";
-        modelName = "moonshotai/kimi-k3-free";
-    } else if (orKey && orKey[0]) {
-        apiKey = orKey;
-        apiUrl = "https://openrouter.ai/api/v1/chat/completions";
-        modelName = "meta-llama/llama-3.1-8b-instruct:free";
-    } else if (oaKey && oaKey[0]) {
-        apiKey = oaKey;
-        apiUrl = "https://api.openai.com/v1/chat/completions";
-    }
-
-    if (apiKey.empty()) {
+    LlmConfig config = loadLlmConfig();
+    if (!config.isValid()) {
         std::cerr << "chronos-daemon: No API key environment variable set. Falling back to Oracle-Only.\n";
         return;
     }
 
-    std::string body = "{\"model\":\"" + modelName + "\",\"max_tokens\":4096,\"stream\":true,\"messages\":["
+    std::string body = "{\"model\":\"" + config.modelName + "\",\"max_tokens\":4096,\"stream\":true,\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
 
@@ -193,9 +155,9 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
         out << body;
     }
 
-    std::string cmd = "curl -N -s " + apiUrl + " "
+    std::string cmd = "curl -N -s " + config.apiUrl + " "
                       "-H \"Content-Type: application/json\" "
-                      "-H \"Authorization: Bearer " + apiKey + "\" "
+                      "-H \"Authorization: Bearer " + config.apiKey + "\" "
                       "-d @" + tmpFile;
 
     FILE* pipe = popen(cmd.c_str(), "r");

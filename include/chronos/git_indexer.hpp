@@ -19,7 +19,7 @@ public:
     GitIndexer(const std::string& repoRoot, Codex& codex, AstIndexer& astIndexer);
     ~GitIndexer();
 
-    void indexHistory();
+    void indexHistory(int syncDepthChoice = 3);
 
     AstIndexer& getAstIndexer() { return astIndexer_; }
     Codex& getCodex() { return codex_; }

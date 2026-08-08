@@ -86,7 +86,7 @@ GitIndexer::~GitIndexer() {
     git_libgit2_shutdown();
 }
 
-void GitIndexer::indexHistory() {
+void GitIndexer::indexHistory(int syncDepthChoice) {
     git_repository* repo = static_cast<git_repository*>(repo_);
     git_revwalk* walk = nullptr;
     if (git_revwalk_new(&walk, repo) != 0) {
@@ -130,57 +130,10 @@ void GitIndexer::indexHistory() {
     int totalCommits = targetCommits.size();
     if (totalCommits == 0) return;
     
-    // 5% Sampling for Accurate Data Profile
-    int sampleCount = std::max(1, totalCommits / 20);
-    int step = std::max(1, totalCommits / sampleCount);
-    int totalSampledLines = 0;
-    int actualSamples = 0;
-    
-    for (int i = 0; i < totalCommits; i += step) {
-        git_commit* commit = nullptr;
-        if (git_commit_lookup(&commit, repo, &targetCommits[i]) != 0) continue;
-        
-        git_tree* tree = nullptr;
-        git_commit_tree(&tree, commit);
-        git_tree* parent_tree = nullptr;
-        if (git_commit_parentcount(commit) > 0) {
-            git_commit* parent = nullptr;
-            git_commit_parent(&parent, commit, 0);
-            git_commit_tree(&parent_tree, parent);
-            git_commit_free(parent);
-        }
-        
-        git_diff* diff = nullptr;
-        git_diff_tree_to_tree(&diff, repo, parent_tree, tree, nullptr);
-        
-        git_diff_stats* stats = nullptr;
-        if (git_diff_get_stats(&stats, diff) == 0) {
-            totalSampledLines += git_diff_stats_insertions(stats) + git_diff_stats_deletions(stats);
-            git_diff_stats_free(stats);
-        }
-        
-        git_diff_free(diff);
-        if (parent_tree) git_tree_free(parent_tree);
-        git_tree_free(tree);
-        git_commit_free(commit);
-        actualSamples++;
-    }
-    
-    int avgLines = actualSamples > 0 ? (totalSampledLines / actualSamples) : 0;
-    std::string densityStr = "Low-density";
-    if (avgLines > 200) densityStr = "High-density";
-    else if (avgLines > 50) densityStr = "Medium-density";
-    
-    // 50ms base + 0.5ms per line changed
-    double emaMsPerCommit = 50.0 + (avgLines * 0.5); 
-    double totalEstSeconds = (totalCommits * emaMsPerCommit) / 1000.0;
-    int estMinutes = std::max(1, (int)(totalEstSeconds / 60.0));
-    
-    std::cout << "Analyzed Repository: " << (totalCommits + botCommits) << " total commits.\n";
-    std::cout << "Data Profile: " << densityStr << " structural changes detected (Avg. " << avgLines << " lines changed per commit).\n";
-    std::cout << "Estimated Time: " << estMinutes << " minutes (Based on local hardware performance).\n";
-    
     int processed = 0;
+    int threshold = (syncDepthChoice == 2) ? 14 : 0; // Smart keyframing requires score >= 15
+    double emaMsPerCommit = 50.0;
+
     for (const git_oid& targetOid : targetCommits) {
         auto commitStart = std::chrono::steady_clock::now();
         
@@ -257,7 +210,7 @@ void GitIndexer::indexHistory() {
         std::pair<GitIndexer*, int*> payloadCtx = {this, &commitMutationScore};
         git_diff_foreach(diff, score_cb, nullptr, nullptr, nullptr, &payloadCtx);
         
-        if (commitMutationScore > 0) {
+        if (commitMutationScore > threshold) {
             codex_.beginTransaction();
             modifiedFilesForCurrentCommit_.clear();
 

@@ -161,8 +161,9 @@ void Codex::upsertNode(const Node& n) {
         sqlite3_bind_null(stmt, 8);
     }
     if (sqlite3_step(stmt) != SQLITE_DONE) {
+        std::string err = sqlite3_errmsg(db_);
         sqlite3_finalize(stmt);
-        throw std::runtime_error("upsertNode failed");
+        throw std::runtime_error("upsertNode failed: " + err);
     }
     sqlite3_finalize(stmt);
 }
@@ -511,6 +512,75 @@ std::vector<Edge> Codex::getEdges(const std::string& nodeId, bool outgoing) {
     std::string sql = outgoing
         ? "SELECT target_id, type, probable_target_weight, start_line, call_site_text FROM edges WHERE source_id = ?1 ORDER BY start_line ASC;"
         : "SELECT source_id, type, probable_target_weight, start_line, call_site_text FROM edges WHERE target_id = ?1 ORDER BY start_line ASC;";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        Edge e;
+        if (outgoing) {
+            e.source_id = nodeId;
+            e.target_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        } else {
+            e.source_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            e.target_id = nodeId;
+        }
+        e.type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        e.probable_target_weight = sqlite3_column_double(stmt, 2);
+        e.start_line = sqlite3_column_int(stmt, 3);
+        if (sqlite3_column_text(stmt, 4)) {
+            e.call_site_text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        }
+        edges.push_back(e);
+    }
+    sqlite3_finalize(stmt);
+    return edges;
+}
+
+// getEdgesFiltered: same traversal but with a SQL-level noise filter.
+// Strict exclusion rules applied directly in the query:
+//   - Skips any target whose file_path starts with nothing (external stubs)
+//   - Skips any node living in site-packages, /usr/, or that is a bare
+//     "external_symbol" type edge (stdlib builtins: print, len, etc.)
+//   - Skips zero-byte stub nodes (byte_start == 0 AND byte_end <= 1)
+std::vector<Edge> Codex::getEdgesFiltered(const std::string& nodeId, bool outgoing) {
+    std::vector<Edge> edges;
+
+    // We JOIN edges with nodes so we can apply file_path filters at query time.
+    // For sym: stub targets, we JOIN through the alias table to the real resolved node
+    // before applying byte-range and path filters. This ensures that edges pointing
+    // to sym:foo stubs (which always have byte_end=1) still appear IF the real
+    // implementing node passes the filter.
+    std::string sql;
+    if (outgoing) {
+        sql = R"SQL(
+            SELECT e.target_id, e.type, e.probable_target_weight, e.start_line, e.call_site_text
+            FROM edges e
+            LEFT JOIN alias al ON al.old_id = e.target_id
+            JOIN nodes n ON n.id = COALESCE(al.root_id, e.target_id)
+            WHERE e.source_id = ?1
+              AND e.type != 'external_symbol'
+              AND n.file_path NOT LIKE '%site-packages%'
+              AND n.file_path NOT LIKE '/usr/%'
+              AND n.file_path NOT LIKE '%/usr/%'
+              AND NOT (n.byte_start = 0 AND n.byte_end <= 1)
+            ORDER BY e.start_line ASC;
+        )SQL";
+    } else {
+        sql = R"SQL(
+            SELECT e.source_id, e.type, e.probable_target_weight, e.start_line, e.call_site_text
+            FROM edges e
+            LEFT JOIN alias al ON al.old_id = e.source_id
+            JOIN nodes n ON n.id = COALESCE(al.root_id, e.source_id)
+            WHERE (e.target_id = ?1 OR e.target_id IN (SELECT old_id FROM alias WHERE root_id = ?1))
+              AND e.type != 'external_symbol'
+              AND n.file_path NOT LIKE '%site-packages%'
+              AND n.file_path NOT LIKE '/usr/%'
+              AND n.file_path NOT LIKE '%/usr/%'
+              AND NOT (n.byte_start = 0 AND n.byte_end <= 1)
+            ORDER BY e.start_line ASC;
+        )SQL";
+    }
+
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);

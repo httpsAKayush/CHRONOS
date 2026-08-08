@@ -72,6 +72,7 @@ add_library(chronos_core
   src/rrf.cpp
   src/git_indexer.cpp
   src/diagnose.cpp
+  src/llm_config.cpp
 )
 
 target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include ${hnswlib_SOURCE_DIR})
@@ -102,3 +103,6 @@ target_link_libraries(chronos PRIVATE chronos_core)
 
 enable_testing()
 add_subdirectory(tests)
+
+# --- Installation ---
+install(TARGETS chronos chronos-daemon chronos-indexer DESTINATION /usr/local/bin)

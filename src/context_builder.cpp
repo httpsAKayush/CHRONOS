@@ -27,15 +27,42 @@ ContextBuilder::ContextBuilder(Codex& codex, VectorIndex& vectors, std::string r
 std::string ContextBuilder::readLiveSnippet(const Node& n) const {
     // Ground Truth (project.md I.3): never cache signatures — read live
     // bytes from disk at the exact moment of context assembly.
-    std::string fullPath = (fs::path(repoRoot_) / n.file_path).string();
-    std::ifstream in(fullPath, std::ios::binary);
-    if (!in) return "";
-    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    int64_t start = std::max<int64_t>(0, n.byte_start);
-    int64_t end = std::min<int64_t>(static_cast<int64_t>(content.size()), n.byte_end);
-    if (end <= start) return "";
-    return content.substr(start, end - start);
+    // Path-resilient: if the stored path doesn't exist, walk the repo tree
+    // to find a file whose basename matches (handles stale prefix in DB).
+    auto tryRead = [&](const std::string& path) -> std::string {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return "";
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        int64_t start = std::max<int64_t>(0, n.byte_start);
+        int64_t end = std::min<int64_t>(static_cast<int64_t>(content.size()), n.byte_end);
+        if (end <= start) return "";
+        return content.substr(start, end - start);
+    };
+
+    // Primary path: stored file_path joined with repoRoot
+    std::string primary = (fs::path(repoRoot_) / n.file_path).string();
+    std::string snippet = tryRead(primary);
+    if (!snippet.empty()) return snippet;
+
+    // Fallback: walk the repo looking for a file whose relative path *ends with*
+    // the stored file_path basename. Handles "matching/matcher.py" → "ct_pipeline/matching/matcher.py"
+    std::string storedFilename = fs::path(n.file_path).filename().string();
+    std::string storedRelDir   = fs::path(n.file_path).parent_path().filename().string(); // e.g. "matching"
+    try {
+        for (auto& entry : fs::recursive_directory_iterator(repoRoot_)) {
+            if (!entry.is_regular_file()) continue;
+            auto p = entry.path();
+            if (p.filename() != storedFilename) continue;
+            // Extra guard: parent dir name must also match to avoid false positives
+            if (p.parent_path().filename() != storedRelDir) continue;
+            snippet = tryRead(p.string());
+            if (!snippet.empty()) return snippet;
+        }
+    } catch (...) {}
+
+    return "";
 }
+
 
 BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
                                    int contextNodeBudget, float seedConfidenceFloor,
@@ -154,7 +181,9 @@ BuildResult ContextBuilder::buildExplain(std::string targetSymbol, const std::st
         return result;
     }
 
-    std::vector<Edge> edges = codex_.getEdges(rootId, false);
+    // Traverse OUTGOING edges to collect direct callees (the function's dependencies).
+    // Use filtered variant to exclude stdlib/external noise.
+    std::vector<Edge> edges = codex_.getEdgesFiltered(rootId, /*outgoing=*/true);
     std::unordered_set<std::string> depIds;
     for (const auto& e : edges) {
         try {

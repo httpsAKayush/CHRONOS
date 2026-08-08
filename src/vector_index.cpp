@@ -1,4 +1,5 @@
 #include "chronos/vector_index.hpp"
+#include "chronos/llm_config.hpp"
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -325,18 +326,22 @@ std::vector<float> embedText(const std::string& text) {
     std::vector<float> vec(VectorIndex::kDim, 0.f);
     if (text.empty()) return vec;
 
-    const char* sysKey = std::getenv("OPENAI_API_KEY");
-    std::string apiKey = sysKey ? sysKey : "";
-    
-    if (!apiKey.empty()) {
+    LlmConfig conf = loadLlmConfig();
+    if (!conf.apiUrl.empty()) {
+        std::string embedUrl = conf.apiUrl;
+        size_t pos = embedUrl.find("/chat/completions");
+        if (pos != std::string::npos) {
+            embedUrl.replace(pos, 17, "/embeddings");
+        }
+
         std::string escapedText;
         for (char c : text) {
             if (c == '"' || c == '\\') escapedText += '\\';
-            if (c == '\n') escapedText += "\\n";
+            else if (c == '\n') escapedText += "\\n";
             else escapedText += c;
         }
         
-        std::string body = "{\"input\":\"" + escapedText + "\",\"model\":\"text-embedding-3-small\"}";
+        std::string body = "{\"input\":\"" + escapedText + "\",\"model\":\"" + conf.modelName + "\"}";
         
         std::string tmpFile = "/tmp/chronos_vec_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + ".json";
         {
@@ -344,11 +349,12 @@ std::vector<float> embedText(const std::string& text) {
             out << body;
         }
 
-        std::string cmd = "curl -s https://api.openai.com/v1/embeddings "
+        std::string authHeader = conf.apiKey.empty() ? "" : "-H \"Authorization: Bearer " + conf.apiKey + "\" ";
+        std::string cmd = "curl -s " + embedUrl + " "
                           "-H \"Content-Type: application/json\" "
-                          "-H \"Authorization: Bearer " + apiKey + "\" "
+                          + authHeader +
                           "-d @" + tmpFile;
-                          
+                              
         FILE* pipe = popen(cmd.c_str(), "r");
         if (pipe) {
             char buffer[128];

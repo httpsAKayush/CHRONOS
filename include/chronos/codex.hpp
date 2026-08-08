@@ -104,6 +104,9 @@ public:
     std::optional<Node> findBySimhashGlobal(uint64_t simhash);
     
     std::vector<Edge> getEdges(const std::string& nodeId, bool outgoing);
+    // Same as getEdges but strips external/stdlib noise so only user-project
+    // nodes appear (site-packages, /usr/, zero-byte stubs excluded).
+    std::vector<Edge> getEdgesFiltered(const std::string& nodeId, bool outgoing);
     std::vector<Node> queryNodesByPathPrefix(const std::string& prefix);
 
     // --- Tracing ---

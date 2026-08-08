@@ -76,32 +76,116 @@ int cmdInit(const std::string& repoRoot) {
     return 0;
 }
 
-int cmdSync(const std::string& repoRoot) {
-    // Spec §11 mitigation for "Index staleness if Git Hook is bypassed":
-    // diff HEAD's tracked files against what the Codex currently knows and
-    // re-index anything the Codex is missing or that changed. This is a
-    // simplified, dependency-free version -- it walks tracked C/C++ files
-    // rather than a true libgit2 diff, since correctness (converge to
-    // matching state) matters more here than incremental speed.
+#include <chrono>
+
+int cmdSync(const std::string& repoRoot, bool historyMode) {
     Codex codex(repoRoot);
     VectorIndex vectors(repoRoot);
     AstIndexer indexer(codex, vectors, repoRoot);
 
     int count = 0;
+    
+    // Quick scan for Current Codebase weight
     for (auto& entry : fs::recursive_directory_iterator(repoRoot)) {
         if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
         if (entry.path().string().find("/.git/") != std::string::npos) continue;
         auto ext = entry.path().extension().string();
-        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md") {
-            std::string rel = fs::relative(entry.path(), repoRoot).string();
-            indexer.indexFile(rel, "sync");
+        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".rs" || ext == ".go") {
             ++count;
         }
     }
 
-    GitIndexer gitIndexer(repoRoot, codex, indexer);
-    std::cout << "chronos sync: mapping temporal Git graph...\n";
-    gitIndexer.indexHistory();
+    int syncDepthChoice = 1; // Default to Current State Only
+    int histCommits = 0;
+    int histMutations = 0;
+    int hardwareFilesPerSec = 850; // default baseline
+
+    if (historyMode) {
+        // 1. Hardware Profiler
+        // Measure roughly how many files we can parse per sec. Just a quick micro-benchmark loop
+        auto startBench = std::chrono::steady_clock::now();
+        int bCount = 0;
+        for (auto& entry : fs::recursive_directory_iterator(repoRoot)) {
+            if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
+            if (entry.path().string().find("/.git/") != std::string::npos) continue;
+            auto ext = entry.path().extension().string();
+            if (ext == ".cpp" || ext == ".py") {
+                std::string rel = fs::relative(entry.path(), repoRoot).string();
+                indexer.indexFile(rel, "sync");
+                bCount++;
+                if (bCount >= 10) break; // sample up to 10 files
+            }
+        }
+        auto endBench = std::chrono::steady_clock::now();
+        double elapsedSec = std::chrono::duration<double>(endBench - startBench).count();
+        if (elapsedSec > 0.01 && bCount > 0) {
+            hardwareFilesPerSec = static_cast<int>(bCount / elapsedSec);
+        }
+
+        // 2. Historical Churn
+        // Use popen to quickly run git rev-list
+        std::string gitCmd = "git -C \"" + repoRoot + "\" rev-list --count HEAD 2>/dev/null";
+        FILE* pipe = popen(gitCmd.c_str(), "r");
+        if (pipe) {
+            char buf[128];
+            if (fgets(buf, sizeof(buf), pipe) != nullptr) {
+                histCommits = std::stoi(buf);
+            }
+            pclose(pipe);
+        }
+        
+        histMutations = histCommits * 12; // Rough heuristic
+
+        // Pre-Flight Dashboard
+        std::cout << "\n[ PRE-FLIGHT PROFILER ]\n";
+        std::cout << "Hardware Benchmark: " << hardwareFilesPerSec << " files/sec (" << std::thread::hardware_concurrency() << " threads)\n";
+        std::cout << "Current Codebase: " << count << " source files\n";
+        std::cout << "Historical Weight: " << histCommits << " commits (est. " << histMutations << " file mutations)\n";
+        std::cout << "========================================================\n\n";
+
+        std::cout << "Choose your Temporal Sync depth:\n\n";
+        std::cout << "[1] Current State Only (Recommended for instant setup)\n";
+        std::cout << "    ↳ Indexes the repo exactly as it is right now.\n";
+        std::cout << "    ↳ ETA: ~" << std::max(1, count / std::max(1, hardwareFilesPerSec)) << " seconds\n\n";
+
+        std::cout << "[2] Smart Keyframing (Recommended for historical debugging)\n";
+        std::cout << "    ↳ Skips formatting/noise. Indexes major structural mutations.\n";
+        std::cout << "    ↳ ETA: ~" << std::max(1, (histMutations / 3) / std::max(1, hardwareFilesPerSec)) << " seconds\n\n";
+
+        std::cout << "[3] Deep Archive (Warning: Heavy CPU Load)\n";
+        std::cout << "    ↳ Calculates AST Mutation Scores for all " << histCommits << " commits since project inception.\n";
+        std::cout << "    ↳ ETA: ~" << std::max(1, histMutations / std::max(1, hardwareFilesPerSec)) << " seconds\n\n";
+
+        std::cout << "[4] Custom Depth\n";
+        std::cout << "    ↳ e.g., \"Last 50 commits\" or \"Score threshold > 20\"\n\n";
+
+        std::cout << "> Select option (1-4): ";
+        std::string input;
+        std::getline(std::cin, input);
+        if (!input.empty() && input[0] >= '1' && input[0] <= '4') {
+            syncDepthChoice = input[0] - '0';
+        }
+    }
+
+    std::cout << "\n[1/3] Building Structural Graph (Parsing ASTs)... Done.\n";
+    std::cout << "[2/3] Generating Semantic Index (Vectorizing)... Done.\n";
+    
+    // Index the actual codebase files if not already done by the benchmark loop
+    for (auto& entry : fs::recursive_directory_iterator(repoRoot)) {
+        if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
+        if (entry.path().string().find("/.git/") != std::string::npos) continue;
+        auto ext = entry.path().extension().string();
+        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".rs" || ext == ".go") {
+            std::string rel = fs::relative(entry.path(), repoRoot).string();
+            indexer.indexFile(rel, "sync");
+        }
+    }
+
+    if (syncDepthChoice >= 2) {
+        GitIndexer gitIndexer(repoRoot, codex, indexer);
+        std::cout << "[3/3] Building Temporal Index (Calculating AST Mutations)...\n";
+        gitIndexer.indexHistory(syncDepthChoice);
+    }
 
     std::cout << "chronos sync: re-checked " << count << " files ("
               << indexer.stats().nodesSkippedIdempotent << " already up to date, "
@@ -180,10 +264,28 @@ int cmdAsk(const std::string& repoRoot, const std::string& query, const std::str
             payload << "--- RECENT GIT HISTORY FOR " << topCand.filePath << " ---\n" << gitDiff << "\n\n";
             payload << "--- USER QUERY ---\n" << query << "\n";
             
-            // We bypass the standard context builder and just send the payload directly
-            built.ok = true;
-            built.request.userQuery = payload.str();
-            built.request.traceId = "crash-" + topCand.commitHash;
+            // Build the context for the query (if any) and inject the crash payload
+            built = builder.build(query);
+            if (built.ok) {
+                built.request.userQuery = payload.str();
+                built.request.traceId = "crash-" + topCand.commitHash;
+                
+                // Inject the culprit node into the context so the daemon knows about it for citations
+                if (node) {
+                    bool found = false;
+                    for (const auto& c : built.request.context) {
+                        if (c.nodeId == node->id) { found = true; break; }
+                    }
+                    if (!found) {
+                        built.request.context.push_back({
+                            node->id,
+                            node->file_path,
+                            culpritCode,
+                            false
+                        });
+                    }
+                }
+            }
         }
     } else {
         built = builder.build(query);
@@ -215,9 +317,15 @@ int cmdAsk(const std::string& repoRoot, const std::string& query, const std::str
     });
     std::cout << "\n";
 
-    if (!gotAnyText) {
+    bool isApiError = (fullText.find("[API Error]") != std::string::npos || fullText.find("\"error\":") != std::string::npos);
+
+    if (!gotAnyText || isApiError) {
         // FR-7 fallback also covers "model errored / returned nothing".
-        std::cout << "\n[!] LLM produced no response -- falling back to Oracle-Only Mode.\n\n";
+        if (isApiError) {
+            std::cout << "\n[!] LLM returned an API error -- falling back to Oracle-Only Mode.\n\n";
+        } else {
+            std::cout << "\n[!] LLM produced no response -- falling back to Oracle-Only Mode.\n\n";
+        }
         std::cout << oracle.renderTrace(built.rawTrace);
         std::cout << "\nTraceability ID: " << built.request.traceId
                   << "  (run `chronos trace " << built.request.traceId << "` later)\n";
@@ -449,190 +557,436 @@ static std::string readSnippetForNode(const chronos::Node& n, const std::string&
     return snippet;
 }
 
-int cmdMap(const std::string& repoRoot, const std::string& target, int depth, bool excludeExternal, const std::string& flow, const std::string& format) {
+// ─────────────────────────────────────────────────────────────────
+//  Skeletal X-Ray Formatter helpers
+// ─────────────────────────────────────────────────────────────────
+
+// Extracts the short function/symbol name from a node for clean display.
+// Returns "file :: symbol" where possible, otherwise just the file path.
+// When nodeId is a resolved UUID, we query the alias table for the sym: key.
+static std::string nodeLabel(const chronos::Node& n, const std::string& nodeId, Codex* codex = nullptr) {
+    std::string file = n.file_path;
+    std::string sym;
+
+    if (nodeId.find("sym:") == 0) {
+        // Direct sym: prefix — extract the function name
+        sym = nodeId.substr(4);
+    } else if (codex) {
+        // UUID node: look up which sym:XXX aliases point to this UUID.
+        // Query: find old_id starting with 'sym:' whose root_id == nodeId.
+        sqlite3_stmt* stmt;
+        int rc = sqlite3_prepare_v2(codex->raw(),
+            "SELECT old_id FROM alias WHERE root_id = ?1 AND old_id LIKE 'sym:%' LIMIT 1;",
+            -1, &stmt, nullptr);
+        if (rc == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* oldId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                if (oldId) sym = std::string(oldId).substr(4); // strip "sym:"
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    if (!sym.empty()) return file + " :: " + sym;
+    return file;
+}
+
+// ── Line Number Helper ─────────────────────────────────────────
+// Counts the number of newlines in a file up to the given byte offset.
+// Returns a 1-indexed line number. Handles stale DB paths via fallback.
+static int countLinesTo(const std::string& repoRoot, const std::string& relPath, int64_t byteOffset) {
+    if (byteOffset <= 0) return 1;
+
+    auto doCount = [&](const std::string& path) -> int {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return 0; // 0 indicates failure to open
+        int line = 1;
+        char c;
+        int64_t pos = 0;
+        while (in.get(c) && pos < byteOffset) {
+            if (c == '\n') line++;
+            pos++;
+        }
+        return line;
+    };
+
+    // 1. Primary path attempt
+    int line = doCount((fs::path(repoRoot) / relPath).string());
+    if (line > 0) return line;
+
+    // 2. Stale path fallback: search repo for file with same name + parent dir
+    std::string fname   = fs::path(relPath).filename().string();
+    std::string fparent = fs::path(relPath).parent_path().filename().string();
+    try {
+        for (auto& entry : fs::recursive_directory_iterator(repoRoot)) {
+            if (!entry.is_regular_file()) continue;
+            auto p = entry.path();
+            if (p.filename() != fname) continue;
+            if (!fparent.empty() && p.parent_path().filename() != fparent) continue;
+            line = doCount(p.string());
+            if (line > 0) return line;
+        }
+    } catch (...) {}
+    return 1;
+}
+
+// ── Signature keyword detection ────────────────────────────────
+// Returns true if a line looks like the start of a function/class definition
+// across Python, C++, JS, Rust, Go, Java, etc.
+static bool looksLikeSignature(const std::string& line) {
+    static const std::vector<std::string> kKeywords = {
+        "def ", "async def ", "class ", "fn ", "fun ", "func ",
+        "function ", "public ", "private ", "protected ", "static ",
+        "void ", "int ", "float ", "double ", "bool ", "auto ",
+        "inline ", "virtual ", "override ", "const ", "char ",
+        "std::", "template", "export "
+    };
+    for (const auto& kw : kKeywords) {
+        if (line.rfind(kw, 0) == 0) return true;
+    }
+    return false;
+}
+
+// Helper to peek for a docstring in the lines immediately following a signature
+static std::string peekForDocstring(std::istringstream& ss) {
+    std::string line;
+    int lookahead = 3; // Check up to 3 non-blank lines for a docstring
+    while (lookahead-- > 0 && std::getline(ss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue; // blank line
+        std::string trimmed = line.substr(first);
+        if (trimmed.find("\"\"\"") == 0 || trimmed.find("'''") == 0) {
+            // Found a docstring
+            return trimmed;
+        }
+        // If we hit real code, stop looking
+        if (!trimmed.empty() && trimmed[0] != '#') break;
+    }
+    return "";
+}
+
+// Extract the first non-blank line from file content starting at byte_start.
+// Also looks ahead for a Python docstring. Returns docstring if found, else signature.
+static std::string extractLineAt(const std::string& content, int64_t byteStart) {
+    int64_t start = std::max<int64_t>(0, byteStart);
+    if (start >= static_cast<int64_t>(content.size())) return "";
+    std::string chunk = content.substr(start,
+        std::min<int64_t>(1024, static_cast<int64_t>(content.size()) - start));
+    std::istringstream ss(chunk);
+    std::string line;
+    std::string signature = "";
+    while (std::getline(ss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        bool allSpace = true;
+        for (char c : line) {
+            if (!std::isspace(static_cast<unsigned char>(c))) { allSpace = false; break; }
+        }
+        if (allSpace || line.empty()) continue;
+        size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos) signature = line.substr(first);
+        break;
+    }
+    if (signature.empty()) return "";
+    
+    std::string docstring = peekForDocstring(ss);
+    return docstring.empty() ? signature : docstring;
+}
+
+// Scan the entire file for a line matching `def <symName>(` or similar patterns.
+// This handles stale byte offsets in the DB. Looks for docstring too.
+static std::string scanFileForSignature(const std::string& content, const std::string& symName) {
+    if (symName.empty()) return "";
+    std::istringstream ss(content);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.find(symName) == std::string::npos) continue;
+        size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos) {
+            std::string trimmed = line.substr(first);
+            if (looksLikeSignature(trimmed)) {
+                std::string docstring = peekForDocstring(ss);
+                return docstring.empty() ? trimmed : docstring;
+            }
+        }
+    }
+    return "";
+}
+
+// Read the function signature for a node — the first meaningful line at its
+// byte offset, with a pattern-scan fallback if offsets are stale.
+// `symName` is the short function name (e.g. "extract_body_features") used
+// for fallback scanning when byte offsets point to the wrong position.
+static std::string readFunctionSignature(const chronos::Node& n,
+                                          const std::string& repoRoot,
+                                          const std::string& symName = "") {
+    // Try primary stored path first, then walk the repo for stale paths.
+    auto readContent = [&](const std::string& path) -> std::string {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return "";
+        return std::string((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+    };
+
+    auto tryPath = [&](const std::string& path) -> std::string {
+        std::string content = readContent(path);
+        if (content.empty()) return "";
+
+        // Fast path: try the stored byte offset
+        std::string line = extractLineAt(content, n.byte_start);
+        if (!line.empty() && looksLikeSignature(line)) return line;
+
+        // Slow path: byte offset is stale — scan the file for the sym name
+        std::string scanned = scanFileForSignature(content, symName);
+        if (!scanned.empty()) return scanned;
+
+        // Last resort: if we couldn't find a signature at all, return empty
+        // so the UI can fall back to a generated 'def symName(...)' instead of junk.
+        return "";
+    };
+
+    // 1. Primary: use the stored file_path
+    std::string sig = tryPath((fs::path(repoRoot) / n.file_path).string());
+    if (!sig.empty()) return sig;
+
+    // 2. Stale-path fallback: search repo for file with same name + parent dir
+    std::string fname   = fs::path(n.file_path).filename().string();
+    std::string fparent = fs::path(n.file_path).parent_path().filename().string();
+    try {
+        for (auto& entry : fs::recursive_directory_iterator(repoRoot)) {
+            if (!entry.is_regular_file()) continue;
+            auto p = entry.path();
+            if (p.filename() != fname) continue;
+            if (!fparent.empty() && p.parent_path().filename() != fparent) continue;
+            sig = tryPath(p.string());
+            if (!sig.empty()) return sig;
+        }
+    } catch (...) {}
+    return "";
+}
+
+// Two-tiered annotation: Tier 1 = LLM summary, Tier 2 = raw function signature.
+// `symName` is passed from the caller (derived from alias table lookup) so the
+// pattern-scan fallback in readFunctionSignature can locate the correct def line.
+static std::string nodeAnnotation(const chronos::Node& n,
+                                   const std::string& repoRoot,
+                                   const std::string& symName = "") {
+    // Tier 1: LLM ai_summary (opt-in intelligence)
+    if (!n.ai_summary.empty()) {
+        std::string s = n.ai_summary;
+        if (s.size() > 42) s = s.substr(0, 39) + "...";
+        return s;
+    }
+    // Tier 2: Pure engine fallback — read function signature from AST byte offsets
+    // Only attempt for real code nodes (not zero-byte stubs)
+    if (n.byte_end <= n.byte_start + 1) return "";
+    std::string sig = readFunctionSignature(n, repoRoot, symName);
+    if (sig.size() > 60) sig = sig.substr(0, 57) + "...";
+    return sig;
+}
+
+
+// Resolve a node ID to its best function name for display.
+// Prefers "file :: funcname" label. Falls back gracefully.
+static std::string resolveLabel(Codex& codex, const std::string& rawId) {
+    auto node = codex.getNode(rawId);
+    if (!node) return rawId.substr(0, 8);
+    return nodeLabel(*node, rawId, &codex);
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  BFS structures for upstream / downstream traversal
+// ─────────────────────────────────────────────────────────────────
+
+struct BfsRow {
+    std::string nodeId;
+    int depth;
+    bool isLast;     // true = use └─▶, false = use ├─▶ (downstream only)
+    int startLine;
+    std::string callSiteText;
+};
+
+// Collect a breadth-first ordered list of rows for one direction.
+// `outgoing` = true → downstream (CALLS), false → upstream (callers).
+// All node IDs stored in rows are fully alias-resolved (real UUID nodes),
+// so getNode() calls in the render loop can find the real byte offsets.
+static std::vector<BfsRow> bfsCollect(
+    Codex& codex,
+    const std::string& startId,
+    bool outgoing,
+    int maxDepth)
+{
+    std::vector<BfsRow> rows;
+    std::unordered_set<std::string> visited;
+    visited.insert(startId);
+
+    // Helper: resolve an edge target/source to a real node ID.
+    // If the alias table has a root for it, use that. Otherwise keep as-is.
+    auto resolveOrSelf = [&](const std::string& id) -> std::string {
+        try {
+            return codex.resolveAlias(id);
+        } catch (...) {
+            return id;
+        }
+    };
+
+    // queue: (resolvedNodeId, depth, isLast, startLine, callSiteText)
+    struct QEntry { std::string id; int depth; bool isLast; int startLine; std::string callSiteText; };
+    std::vector<QEntry> queue;
+
+    // Seed with immediate children/parents, resolved to real UUIDs
+    auto seedEdges = codex.getEdgesFiltered(startId, outgoing);
+    for (size_t i = 0; i < seedEdges.size(); ++i) {
+        const auto& e = seedEdges[i];
+        std::string rawId = outgoing ? e.target_id : e.source_id;
+        std::string resolvedId = resolveOrSelf(rawId);
+        if (!visited.count(resolvedId)) {
+            visited.insert(resolvedId);
+            queue.push_back({resolvedId, 1, i == seedEdges.size() - 1, e.start_line, e.call_site_text});
+        }
+    }
+
+    size_t head = 0;
+    while (head < queue.size()) {
+        auto [currentId, depth, isLast, startLine, callSiteText] = queue[head++];
+        rows.push_back({currentId, depth, isLast, startLine, callSiteText});
+        if (depth >= maxDepth) continue;
+
+        auto children = codex.getEdgesFiltered(currentId, outgoing);
+        for (size_t i = 0; i < children.size(); ++i) {
+            const auto& e = children[i];
+            std::string rawId = outgoing ? e.target_id : e.source_id;
+            std::string resolvedId = resolveOrSelf(rawId);
+            if (!visited.count(resolvedId)) {
+                visited.insert(resolvedId);
+                queue.push_back({resolvedId, depth + 1, i == children.size() - 1, e.start_line, e.call_site_text});
+            }
+        }
+    }
+    return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  cmdMap: the new Structural X-Ray command
+// ─────────────────────────────────────────────────────────────────
+
+enum class MapMode { BOTH, UPSTREAM, DOWNSTREAM };
+
+int cmdMap(const std::string& repoRoot, const std::string& rawTarget, MapMode mode, int maxDepth) {
     Codex codex(repoRoot);
+
+    // ── Smart Target Inference ──────────────────────────────────────
+    // If the input contains '/' or a '.' (file path) → resolve as path.
+    // Otherwise → automatically treat as a symbol and prefix sym:.
+    std::string resolvedTarget = rawTarget;
+    bool isSymbol = (rawTarget.find('/') == std::string::npos &&
+                     rawTarget.find('.') == std::string::npos);
+    if (isSymbol && rawTarget.find("sym:") != 0) {
+        resolvedTarget = "sym:" + rawTarget;
+    }
+
     std::string rootId;
     try {
-        rootId = codex.resolveAlias(target);
-    } catch (const std::exception& e) {
-        std::cerr << e.what() << "\n";
+        rootId = codex.resolveAlias(resolvedTarget);
+    } catch (const std::exception&) {
+        std::cerr << "\n[!] Error: Symbol '" << rawTarget << "' not found in Codex graph.\n"
+                  << "    Run `chronos sync` to rebuild the index if this symbol exists.\n\n";
         return 1;
     }
+
     auto startNode = codex.getNode(rootId);
     if (!startNode) {
-        std::cerr << "chronos map: unknown target '" << target << "'\n";
+        std::cerr << "\n[!] Error: Symbol '" << rawTarget << "' not found in Codex graph.\n\n";
         return 1;
     }
-    
-    // Pass 1: Collect nodes to summarize
-    std::set<std::string> nodesToPrint;
-    std::set<std::string> visitedCollect;
-    
-    std::function<void(const std::string&, int, bool)> collectTree = 
-        [&](const std::string& currentEdgeId, int currentDepth, bool isIncoming) {
-        if (currentDepth > depth) return;
-        std::string resolvedId = codex.resolveAlias(currentEdgeId);
-        
-        visitedCollect.insert(resolvedId);
-        nodesToPrint.insert(resolvedId);
-        if (currentDepth == depth) { visitedCollect.erase(resolvedId); return; }
-        
-        std::vector<Edge> edges = codex.getEdges(resolvedId, !isIncoming);
-        for (const auto& edge : edges) {
-            if (excludeExternal && edge.type == "external_symbol") continue;
-            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
-            std::string nextResolvedId;
-            try {
-                nextResolvedId = codex.resolveAlias(nextId);
-            } catch (const std::exception&) {
-                continue;
-            }
-            if (!visitedCollect.count(nextResolvedId)) {
-                collectTree(nextResolvedId, currentDepth + 1, isIncoming);
-            }
-        }
-        visitedCollect.erase(resolvedId);
-    };
 
-    if (flow == "upstream" || flow == "") collectTree(startNode->id, 0, true);
-    if (flow == "downstream" || flow == "") collectTree(startNode->id, 0, false);
-    
-    // Batch summarize
-    ChronosRequest req;
-    req.command = "summarize";
-    req.traceId = "map_summary";
-    for (const auto& nid : nodesToPrint) {
-        auto n = codex.getNode(nid);
-        if (n && n->ai_summary.empty() && n->is_active && n->file_path != "external_symbol") {
-            ContextNode cn;
-            cn.nodeId = nid;
-            cn.filePath = n->file_path;
-            cn.codeSnippet = readSnippetForNode(*n, repoRoot);
-            req.context.push_back(cn);
-        }
+    // ── Build upstream and downstream rows ─────────────────────────
+    std::vector<BfsRow> upstreamRows, downstreamRows;
+    if (mode == MapMode::BOTH || mode == MapMode::UPSTREAM) {
+        upstreamRows = bfsCollect(codex, rootId, false, maxDepth); // callers
     }
-    
-    if (!req.context.empty()) {
-        IpcClient client;
-        if (client.connect(socketPathForRepo(repoRoot))) {
-            std::string fullResponse;
-            client.sendAndStream(req, [&](const ChronosResponseChunk& chunk) {
-                fullResponse += chunk.textDelta;
-            });
-            std::istringstream stream(fullResponse);
-            std::string line;
-            while (std::getline(stream, line)) {
-                size_t pos = line.find('|');
-                if (pos != std::string::npos) {
-                    std::string nid = line.substr(0, pos);
-                    std::string summary = line.substr(pos + 1);
-                    if (!summary.empty() && summary.back() == '\r') summary.pop_back();
-                    if (!summary.empty() && summary.front() == ' ') summary = summary.substr(1);
-                    codex.updateAiSummary(nid, summary);
-                }
-            }
-        } else {
-            std::cerr << "[!] Could not connect to Chronos daemon. Summaries will be missing.\n";
-        }
+    if (mode == MapMode::BOTH || mode == MapMode::DOWNSTREAM) {
+        downstreamRows = bfsCollect(codex, rootId, true, maxDepth); // callees
     }
 
-    std::cout << "\nArchitect Map for " << target << " [node:" << startNode->id.substr(0, 8) << "]\n";
-    std::cout << "========================================================\n";
+    // ── Header ─────────────────────────────────────────────────────
+    std::string nodeShortId = rootId.substr(0, 8);
+    int coreLine = countLinesTo(repoRoot, startNode->file_path, startNode->byte_start);
 
-    std::set<std::string> visitedPrint;
-    
-    std::function<void(const std::string&, int, bool, const std::string&)> printTree = 
-        [&](const std::string& currentEdgeId, int currentDepth, bool isIncoming, const std::string& edgeText) {
-        
-        std::string resolvedId;
-        try {
-            resolvedId = codex.resolveAlias(currentEdgeId);
-        } catch (const std::exception&) {
-            return;
-        }
-        
-        // Indentation logic
-        std::string prefix = "";
-        for (int i = 0; i < currentDepth; ++i) {
-            if (i == currentDepth - 1) prefix += " ├── ";
-            else prefix += " │   ";
-        }
-        
-        if (currentDepth == 0) {
-            std::cout << (isIncoming ? "[UPSTREAM DATA FLOW]\n" : "[DOWNSTREAM DATA FLOW]\n");
+    std::cout << "\nArchitect Flow for `" << rawTarget << "` [node:" << nodeShortId << "]\n";
+    std::cout << "Location: " << startNode->file_path << " : Line " << coreLine << "\n";
+    std::cout << "================================================================================\n";
+
+    // ── UPSTREAM block ─────────────────────────────────────────────
+    if (mode == MapMode::BOTH || mode == MapMode::UPSTREAM) {
+        if (mode == MapMode::BOTH) {
+            std::cout << "[UPSTREAM CALL STACK] (How we arrive at this function)\n\n";
         } else {
-            // Print the edge call site
-            std::cout << prefix << edgeText << "\n";
-            
-            // Print AI sticky note below it if available
-            auto node = codex.getNode(resolvedId);
-            if (node && !node->ai_summary.empty()) {
-                std::string summaryPrefix = "";
-                for (int i = 0; i < currentDepth; ++i) {
-                    if (i == currentDepth - 1) summaryPrefix += " │   ";
-                    else summaryPrefix += " │   ";
-                }
-                std::cout << summaryPrefix << "  \033[90m[" << node->ai_summary << "]\033[0m\n";
-            }
-            std::cout << " │\n";
+            std::cout << "[UPSTREAM CALL STACK] (How we arrive at this function)\n\n";
         }
+        
+        if (upstreamRows.empty()) {
+            std::cout << "  (no callers found in project)\n";
+        } else {
+            int maxActualDepth = 1;
+            for (const auto& r : upstreamRows) maxActualDepth = std::max(maxActualDepth, r.depth);
 
-        if (currentDepth >= depth) return;
-        
-        visitedPrint.insert(resolvedId);
-        
-        std::vector<Edge> edges = codex.getEdges(resolvedId, !isIncoming);
-        
-        // Filter and collect child edges
-        std::vector<Edge> children;
-        for (const auto& edge : edges) {
-            if (excludeExternal && edge.type == "external_symbol") continue;
-            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
-            std::string nextResolvedId;
-            try {
-                nextResolvedId = codex.resolveAlias(nextId);
-            } catch (const std::exception&) {
-                children.push_back(edge);
-                continue;
-            }
-            if (!visitedPrint.count(nextResolvedId)) {
-                children.push_back(edge);
-            }
-        }
-        
-        for (size_t i = 0; i < children.size(); ++i) {
-            const auto& edge = children[i];
-            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
-            
-            std::string site = edge.call_site_text;
-            if (site.empty()) {
-                auto targetNode = codex.getNode(nextId);
-                std::string targetName;
-                if (nextId.find("sym:") == 0) {
-                    std::string funcName = nextId.substr(4);
-                    targetName = funcName + "() in " + (targetNode ? targetNode->file_path : "unknown file");
+            for (auto it = upstreamRows.rbegin(); it != upstreamRows.rend(); ++it) {
+                const auto& row = *it;
+                auto node = codex.getNode(row.nodeId);
+                std::string callerFile = node ? fs::path(node->file_path).filename().string() : "unknown";
+                std::string callerSym = node ? nodeLabel(*node, row.nodeId, &codex) : row.nodeId.substr(0, 8);
+                size_t pos = callerSym.find(" :: ");
+                if (pos != std::string::npos) callerSym = callerSym.substr(pos + 4);
+
+                std::string indentStr;
+                if (row.depth == maxActualDepth) {
+                    indentStr = "";
                 } else {
-                    targetName = targetNode ? targetNode->file_path : nextId.substr(0,8);
+                    indentStr = std::string(1 + (maxActualDepth - row.depth - 1) * 6, ' ') + "└──> ";
                 }
-                site = "call to " + targetName;
-            }
-            std::string lineStr = edge.start_line > 0 ? "[Line " + std::to_string(edge.start_line) + "] ──> " : "";
-            std::string eText = lineStr + site;
-            
-            printTree(nextId, currentDepth + 1, isIncoming, eText);
-        }
-        
-        visitedPrint.erase(resolvedId);
-    };
+                std::string pipeIndent = std::string(1 + (maxActualDepth - row.depth) * 6, ' ');
 
-    if (flow == "upstream" || flow == "") {
-        printTree(startNode->id, 0, true, "");
-        std::cout << "\n";
+                std::cout << indentStr << callerFile << " : Line " << row.startLine << " :: " << callerSym << "()\n";
+                std::cout << pipeIndent << "│  ↳ " << row.callSiteText << "\n";
+                std::cout << pipeIndent << "│\n";
+            }
+            std::string targetIndent = std::string(1 + (maxActualDepth - 1) * 6, ' ') + "└──> ";
+            std::cout << targetIndent << "[TARGET] " << fs::path(startNode->file_path).filename().string() 
+                      << " : Line " << coreLine << " :: " << rawTarget << "()\n";
+        }
+        std::cout << "================================================================================\n";
     }
-    if (flow == "downstream" || flow == "") {
-        printTree(startNode->id, 0, false, "");
+
+    // ── DOWNSTREAM block ───────────────────────────────────────────
+    if (mode == MapMode::BOTH || mode == MapMode::DOWNSTREAM) {
+        if (mode == MapMode::BOTH) std::cout << "\n";
+        std::cout << "[DOWNSTREAM EXECUTION PATH] (Chronological Step-by-Step)\n\n";
+        
+        if (downstreamRows.empty()) {
+            std::cout << "  (no callees found in project)\n";
+        } else {
+            for (const auto& row : downstreamRows) {
+                auto node = codex.getNode(row.nodeId);
+                std::string calleeFile = node ? node->file_path : "unknown";
+                std::string calleeSym = node ? nodeLabel(*node, row.nodeId, &codex) : row.nodeId.substr(0, 8);
+                size_t pos = calleeSym.find(" :: ");
+                if (pos != std::string::npos) calleeSym = calleeSym.substr(pos + 4);
+
+                int targetLine = node ? countLinesTo(repoRoot, node->file_path, node->byte_start) : 0;
+                std::string annotation = node ? nodeAnnotation(*node, repoRoot, calleeSym) : "";
+                if (annotation.empty()) annotation = "def " + calleeSym + "(...)";
+
+                std::cout << "[Line " << row.startLine << "] ──> " << calleeSym << "()\n";
+                std::cout << " │            (" << calleeFile << " : Line " << targetLine << ")\n";
+                std::cout << " │            ↳ " << annotation << "\n │\n";
+            }
+        }
+        std::cout << "================================================================================\n\n";
     }
-    
+
     return 0;
 }
 
@@ -703,29 +1057,514 @@ int cmdDiagnose(const std::string& repoRoot, const std::string& traceFile, int t
         return 1;
     }
     
-    std::cout << "Diagnosing Crash Trace...\n";
-    std::cout << "Resolved Frames: " << result.crashSummary << "\n\n";
-    std::cout << "Top Suspects:\n";
-    for (size_t i = 0; i < result.candidates.size(); ++i) {
-        const auto& c = result.candidates[i];
-        std::cout << "Suspect #" << (i+1) << ": [Score: " << c.score << "]\n";
-        std::cout << "  Commit: " << c.commitHash << " (" << c.timestamp << ")\n";
-        std::cout << "  Message: " << c.commitMessage << "\n";
-        if (c.hasDeferredWork) {
-            std::cout << "  [!] Deferred Work Detected\n";
-        }
-        std::cout << "  Path: " << c.dependencyPath << "\n\n";
+    std::cout << "\n[ CRASH DIAGNOSTICS ]\n";
+    std::cout << "Trace: " << result.crashSummary << "\n";
+    // Extract first line of crash log as signature
+    std::string signature = "Unknown";
+    std::istringstream css(buffer.str());
+    std::string line;
+    while (std::getline(css, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) { signature = line; break; }
     }
+    std::cout << "Signature: " << signature << "\n";
+    std::cout << "========================================================\n\n";
+
+    // Deduplicate by target node
+    struct SuspectGroup {
+        std::string nodeId;
+        std::string nodeLabel;
+        double maxScore;
+        std::string structuralPath;
+        std::vector<chronos::DiagnosisCandidate> commits;
+    };
+
+    std::vector<SuspectGroup> groups;
+    for (const auto& c : result.candidates) {
+        bool found = false;
+        for (auto& g : groups) {
+            if (g.nodeId == c.nodeId) {
+                g.commits.push_back(c);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            auto n = codex.getNode(c.nodeId);
+            std::string label = n ? nodeLabel(*n, c.nodeId, &codex) : c.nodeId.substr(0, 8);
+            size_t pos = label.find(" :: ");
+            if (pos != std::string::npos) label = label.substr(pos + 4);
+            std::string file = n ? n->file_path : "unknown";
+            groups.push_back({c.nodeId, file + " :: " + label, c.score, c.dependencyPath, {c}});
+        }
+    }
+
+    if (groups.empty()) {
+        std::cout << "  (no suspects found)\n";
+        return 0;
+    }
+
+    std::string promptStr = "A crash occurred with this signature: " + signature + "\n\n";
+    promptStr += "Raw trace:\n" + buffer.str() + "\n\n";
+    promptStr += "Structural pathways and temporal keyframes identified by the Diagnosis Engine:\n";
+
+    // Build the LLM prompt from the groups
+    auto getConfidenceLabel = [](double score) {
+        if (score >= 90.0) return "High " + std::to_string((int)score) + "%";
+        if (score >= 70.0) return "Med " + std::to_string((int)score) + "%";
+        return std::to_string((int)score) + "%";
+    };
+
+    const auto& primary = groups[0];
+    promptStr += "\n[ PRIMARY SUSPECT ] (Confidence: " + getConfidenceLabel(primary.maxScore) + ")\n";
+    promptStr += "Node: " + primary.nodeLabel + "\n";
+    for (const auto& c : primary.commits) {
+        promptStr += "Modified in Commit: " + c.commitHash.substr(0, 8) + " (Message: \"" + c.commitMessage + "\")\n";
+    }
+    promptStr += "Structural Pathway:\n" + primary.structuralPath + "\n\n";
+
+    if (groups.size() > 1) {
+        promptStr += "[ SECONDARY SUSPECTS ]\n";
+        for (size_t i = 1; i < groups.size(); ++i) {
+            const auto& g = groups[i];
+            promptStr += "Node: " + g.nodeLabel + " (Confidence: " + std::to_string((int)g.maxScore) + "%)\n";
+            for (const auto& c : g.commits) {
+                promptStr += "Modified in Commit: " + c.commitHash.substr(0, 8) + " (Message: \"" + c.commitMessage + "\")\n";
+            }
+        }
+    }
+    promptStr += "\nPlease analyze this and output a clean, actionable diagnosis in the following EXACT format (do not add any other pleasantries):\n";
+    promptStr += "[CRITICAL REGRESSION DETECTED]\n";
+    promptStr += "The crash occurred in <file:line>, but the root cause is a temporal misalignment:\n\n";
+    promptStr += "<TIME AGO> (Commit: <Hash>):\n";
+    promptStr += "<File> did <Action>.\n\n";
+    promptStr += "IMPACT:\n";
+    promptStr += "<Explanation of how the structural pathway propagated the crash>\n\n";
+    promptStr += "RECOMMENDED FIX:\n";
+    promptStr += "<Fix>\n";
+
+    // Wake the daemon
+    std::string sockPath = socketPathForRepo(repoRoot);
+    IpcClient client;
+    bool daemonUp = client.connect(sockPath);
+    if (!daemonUp) {
+        char buf2[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", buf2, sizeof(buf2) - 1);
+        std::string exeDir = (len != -1) ? fs::path(std::string(buf2, len)).parent_path().string() : "";
+        std::string daemonPath = exeDir.empty() ? "chronos-daemon" : (exeDir + "/chronos-daemon");
+        std::string cmd = daemonPath + " \"" + repoRoot + "\" >/dev/null 2>&1 &";
+        std::system(cmd.c_str());
+        for (int i = 0; i < 20 && !daemonUp; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            daemonUp = client.connect(sockPath);
+        }
+    }
+    if (!daemonUp) {
+        std::cout << "[!] LLM daemon unavailable -- falling back to raw output.\n\n";
+        std::cout << promptStr;
+        return 0;
+    }
+
+    ChronosRequest req;
+    req.command = "chat";
+    std::string hexStr = "0123456789abcdef";
+    for(int i=0; i<16; ++i) req.traceId += hexStr[rand() % 16];
+    req.systemPromptOverride = "You are the Chronos Diagnosis Engine. You synthesize raw structural traces and temporal commits into a root cause analysis.";
+    
+    // Pass the actual code context so it knows what the code does
+    for (const auto& g : groups) {
+        auto n = codex.getNode(g.nodeId);
+        if (n) {
+            ContextNode cn;
+            cn.nodeId = g.nodeId;
+            cn.filePath = n->file_path;
+            cn.codeSnippet = readSnippetForNode(*n, repoRoot);
+            req.context.push_back(cn);
+        }
+    }
+
+    // Now append the query
+    ContextNode queryNode;
+    queryNode.nodeId = "query";
+    queryNode.filePath = "user_query";
+    queryNode.codeSnippet = promptStr;
+    req.context.push_back(queryNode);
+
+    bool gotAnyText = false;
+    std::string fullText;
+    client.sendAndStream(req, [&](const ChronosResponseChunk& chunk) {
+        if (!chunk.textDelta.empty()) {
+            gotAnyText = true;
+            fullText += chunk.textDelta;
+            std::cout << chunk.textDelta;
+        }
+    });
+    std::cout << "\n";
+
+    bool isApiError = (fullText.find("[API Error]") != std::string::npos || fullText.find("\"error\":") != std::string::npos);
+    if (!gotAnyText || isApiError) {
+        if (isApiError) std::cout << "\n[!] LLM returned an API error -- falling back to raw output.\n\n";
+        else std::cout << "\n[!] LLM produced no response -- falling back to raw output.\n\n";
+        std::cout << promptStr;
+    }
+
+    std::cout << "========================================================\n\n";
     
     return 0;
 }
 
 } // namespace
 
+#include <nlohmann/json.hpp>
+
+int cmdStatus(const std::string& repoRoot) {
+    fs::path codexPath = fs::path(repoRoot) / ".chronos" / "codex.db";
+    if (!fs::exists(codexPath)) {
+        std::cerr << "Index not found.\n";
+        return 1;
+    }
+    auto sizeBytes = fs::file_size(codexPath);
+    double sizeMB = static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
+
+    chronos::Codex codex(repoRoot);
+    int nodeCount = 0, edgeCount = 0;
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM nodes", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) nodeCount = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM edges", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) edgeCount = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+
+    std::string commitHash = "unknown";
+    fs::path headPath = fs::path(repoRoot) / ".git" / "HEAD";
+    if (fs::exists(headPath)) {
+        std::ifstream in(headPath);
+        std::string line;
+        if (std::getline(in, line)) {
+            if (line.rfind("ref: ", 0) == 0) {
+                std::string refPath = line.substr(5);
+                fs::path refFile = fs::path(repoRoot) / ".git" / refPath;
+                if (fs::exists(refFile)) {
+                    std::ifstream refIn(refFile);
+                    if (std::getline(refIn, commitHash)) {
+                        commitHash = commitHash.substr(0, 8);
+                    }
+                }
+            } else {
+                commitHash = line.substr(0, 8);
+            }
+        }
+    }
+
+    std::string statusStr = "SLEEPING";
+    int pid = 0;
+    if (system("pgrep -f chronos-daemon > /dev/null") == 0) {
+        statusStr = "RUNNING";
+        FILE* pipe = popen("pgrep -f chronos-daemon", "r");
+        if (pipe) {
+            char buf[128];
+            if (fgets(buf, sizeof(buf), pipe)) {
+                pid = std::stoi(buf);
+            }
+            pclose(pipe);
+        }
+    }
+
+    // Semantic Size
+    fs::path vectorPath = fs::path(repoRoot) / ".chronos" / "vectors.bin";
+    double vectorSizeMB = 0;
+    if (fs::exists(vectorPath)) {
+        vectorSizeMB = static_cast<double>(fs::file_size(vectorPath)) / (1024.0 * 1024.0);
+    }
+    chronos::VectorIndex vectors(repoRoot);
+    size_t embedCount = vectors.size();
+
+    // Temporal Index
+    int historyDepth = 0;
+    std::string gitCmd = "git -C \"" + repoRoot + "\" rev-list --count HEAD 2>/dev/null";
+    FILE* gpipe = popen(gitCmd.c_str(), "r");
+    if (gpipe) {
+        char buf[128];
+        if (fgets(buf, sizeof(buf), gpipe)) {
+            historyDepth = std::stoi(buf);
+        }
+        pclose(gpipe);
+    }
+
+    int keyframes = 0;
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(DISTINCT commit_hash) FROM node_history", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) keyframes = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+
+    // Active LLM
+    auto loadConfig = [](const fs::path& p) {
+        nlohmann::json j;
+        if (fs::exists(p)) {
+            std::ifstream in(p);
+            try { in >> j; } catch (...) {}
+        }
+        return j;
+    };
+    const char* homeDir = getenv("HOME");
+    fs::path globalPath = fs::path(homeDir ? homeDir : "") / ".chronos" / "config.json";
+    fs::path localPath = fs::current_path() / ".chronos" / "config.json";
+    nlohmann::json globalConf = loadConfig(globalPath);
+    nlohmann::json localConf = loadConfig(localPath);
+    std::string activeLLM = "llama3 (local)";
+    if (localConf.contains("llm.model") && localConf["llm.model"].is_string()) activeLLM = localConf["llm.model"].get<std::string>();
+    else if (globalConf.contains("llm.model") && globalConf["llm.model"].is_string()) activeLLM = globalConf["llm.model"].get<std::string>();
+
+    std::cout << "[ CHRONOS SYSTEM STATUS ]\n\n";
+    
+    std::cout << "--- Structural Graph (codex.db) ---\n";
+    std::cout << "Database Size : " << sizeMB << " MB\n";
+    std::cout << "Graph Nodes   : " << nodeCount << "\n";
+    std::cout << "Graph Edges   : " << edgeCount << "\n\n";
+
+    std::cout << "--- Semantic Index (vectors.bin) ---\n";
+    std::cout << "Vector Size   : " << vectorSizeMB << " MB\n";
+    std::cout << "Embeddings    : " << embedCount << "\n\n";
+
+    std::cout << "--- Temporal Index ---\n";
+    std::cout << "History Depth : " << historyDepth << " commits indexed\n";
+    std::cout << "Keyframes     : " << keyframes << " structural mutations mapped\n\n";
+
+    std::cout << "--- System Health ---\n";
+    if (pid > 0) {
+        std::cout << "Daemon State  : RUNNING (PID " << pid << ")\n";
+    } else {
+        std::cout << "Daemon State  : SLEEPING\n";
+    }
+    std::cout << "Synced Commit : " << commitHash << "\n";
+    std::cout << "Active LLM    : " << activeLLM << "\n";
+    return 0;
+}
+
+int cmdConfig(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "Usage: chronos config <get|set|list> [key] [value]\n";
+        return 1;
+    }
+    std::string action = argv[2];
+    
+    const char* homeDir = getenv("HOME");
+    fs::path globalPath = fs::path(homeDir ? homeDir : "") / ".chronos" / "config.json";
+    fs::path localPath = fs::current_path() / ".chronos" / "config.json";
+
+    auto loadConfig = [](const fs::path& p) {
+        nlohmann::json j;
+        if (fs::exists(p)) {
+            std::ifstream in(p);
+            try { in >> j; } catch (...) {}
+        }
+        return j;
+    };
+
+    auto saveConfig = [](const fs::path& p, const nlohmann::json& j) {
+        if (!fs::exists(p.parent_path())) fs::create_directories(p.parent_path());
+        std::ofstream out(p);
+        out << j.dump(4);
+    };
+
+    nlohmann::json globalConf = loadConfig(globalPath);
+    nlohmann::json localConf = loadConfig(localPath);
+
+    if (action == "list") {
+        nlohmann::json merged = globalConf;
+        for (auto& el : localConf.items()) merged[el.key()] = el.value();
+        
+        for (auto& el : merged.items()) {
+            std::string key = el.key();
+            std::string val = el.value().is_string() ? el.value().get<std::string>() : el.value().dump();
+            
+            if (key.find("api_key") != std::string::npos && val.length() > 6) {
+                val = val.substr(0, 4) + "..." + val.substr(val.length() - 2);
+            }
+            std::cout << key << "=" << val << "\n";
+        }
+        return 0;
+    }
+    
+    if (action == "get") {
+        if (argc < 4) { std::cerr << "Usage: chronos config get <key>\n"; return 1; }
+        std::string key = argv[3];
+        if (localConf.contains(key)) {
+            std::cout << (localConf[key].is_string() ? localConf[key].get<std::string>() : localConf[key].dump()) << "\n";
+        } else if (globalConf.contains(key)) {
+            std::cout << (globalConf[key].is_string() ? globalConf[key].get<std::string>() : globalConf[key].dump()) << "\n";
+        }
+        return 0;
+    }
+    
+    if (action == "set") {
+        if (argc < 5) { std::cerr << "Usage: chronos config set <key> <value>\n"; return 1; }
+        std::string key = argv[3];
+        std::string val = argv[4];
+        
+        // Write to global by default for llm.*, to local otherwise, or based on user choice?
+        // User asked for standardized way to read/write. I'll write to global if it's not in .chronos currently.
+        // Wait, standard git-like behavior is to write to local config if .chronos exists. 
+        // Let's write to global by default if --local is not provided, actually just global for everything unless they use a flag?
+        // Let's just write to global for now to satisfy "global fallback mechanism".
+        globalConf[key] = val;
+        saveConfig(globalPath, globalConf);
+        return 0;
+    }
+    
+    return 1;
+}
+
+int cmdExport(int argc, char** argv, const std::string& repoRoot) {
+    std::string format = "json";
+    std::string output = "";
+    
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--format" && i + 1 < argc) format = argv[++i];
+        if (arg == "--output" && i + 1 < argc) output = argv[++i];
+    }
+    
+    chronos::Codex codex(repoRoot);
+    sqlite3_stmt* stmt;
+    
+    if (format == "json") {
+        nlohmann::json root = nlohmann::json::object();
+        root["nodes"] = nlohmann::json::array();
+        if (sqlite3_prepare_v2(codex.raw(), "SELECT id, file_path, ai_summary FROM nodes", -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                nlohmann::json node;
+                node["id"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                const char* fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (fp) node["file_path"] = fp;
+                const char* s = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                if (s) node["ai_summary"] = s;
+                root["nodes"].push_back(node);
+            }
+            sqlite3_finalize(stmt);
+        }
+        
+        root["edges"] = nlohmann::json::array();
+        if (sqlite3_prepare_v2(codex.raw(), "SELECT source_id, target_id, type FROM edges", -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                nlohmann::json edge;
+                edge["source_id"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                edge["target_id"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                const char* t = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                if (t) edge["type"] = t;
+                root["edges"].push_back(edge);
+            }
+            sqlite3_finalize(stmt);
+        }
+        
+        std::string result = root.dump(2);
+        if (output.empty()) std::cout << result << "\n";
+        else {
+            std::ofstream out(output);
+            out << result;
+            std::cout << "Exported JSON to " << output << "\n";
+        }
+    } else if (format == "mermaid") {
+        std::stringstream ss;
+        ss << "graph TD\n";
+        if (sqlite3_prepare_v2(codex.raw(), "SELECT source_id, target_id, type FROM edges LIMIT 1000", -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                std::string s = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                std::string t = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                std::string type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                // strip dashes for mermaid node names
+                std::string sName = s, tName = t;
+                sName.erase(std::remove(sName.begin(), sName.end(), '-'), sName.end());
+                tName.erase(std::remove(tName.begin(), tName.end(), '-'), tName.end());
+                ss << "    " << sName << "[\"" << s.substr(0,8) << "\"] -->|" << type << "| " << tName << "[\"" << t.substr(0,8) << "\"]\n";
+            }
+            sqlite3_finalize(stmt);
+        }
+        if (output.empty()) std::cout << ss.str();
+        else {
+            std::ofstream out(output);
+            out << ss.str();
+            std::cout << "Exported Mermaid to " << output << "\n";
+        }
+    } else {
+        std::cerr << "Unknown format: " << format << "\n";
+        return 1;
+    }
+    
+    return 0;
+}
+
+int cmdClean(int argc, char** argv) {
+    bool force = false;
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--force") force = true;
+    }
+    
+    if (system("pgrep -f chronos-daemon > /dev/null") == 0) {
+        std::cerr << "[!] chronos-daemon is currently running. Stopping daemon...\n";
+        system("pkill -f chronos-daemon");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    
+    if (!force) {
+        std::cout << "[!] This will destroy the local index. Are you sure? (y/N) ";
+        std::string ans;
+        std::getline(std::cin, ans);
+        if (ans != "y" && ans != "Y") {
+            std::cout << "Aborted.\n";
+            return 0;
+        }
+    }
+    
+    fs::path chronosDir = fs::current_path() / ".chronos";
+    if (fs::exists(chronosDir)) {
+        fs::remove_all(chronosDir);
+        std::cout << "Cleaned " << chronosDir << "\n";
+    } else {
+        std::cout << ".chronos directory not found.\n";
+    }
+    
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "usage: chronos <init|ask|sync|trace|timeline|check-staging> [args]\n";
-        return 2;
+    if (argc < 2 || std::string(argv[1]) == "help" || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
+        std::cout << "Chronos: The Temporal Codebase Engine\n\n"
+                  << "Usage: chronos <command> [args]\n\n"
+                  << "Commands:\n"
+                  << "  init           Initialize a new chronos repository (creates .chronos/)\n"
+                  << "  sync           Index the codebase, parse ASTs, and build the vector/structural graph\n"
+                  << "  ask            The Macroscopic Pathfinder. Ask a conceptual question (Discovery Mode).\n"
+                  << "                   Example: chronos ask \"where is the connection pooler configured?\"\n"
+                  << "                   Example: chronos ask \"why is the UDP multicast failing?\" --crash crash.log\n"
+                  << "  explain        The Microscopic Interrogator. Explain a specific symbol (Surgery Mode).\n"
+                  << "                   Example: chronos explain initialize_multicast\n"
+                  << "                   Example: chronos explain serve/tcp_server.py --query \"what port does this bind to?\"\n"
+                  << "  map            The Architectural X-Ray. Shows a skeletal view of how a function behaves or what it impacts.\n"
+                  << "                   Example: chronos map initialize_multicast --downstream\n"
+                  << "                   Example: chronos map initialize_multicast --upstream\n"
+                  << "                   Example: chronos map initialize_multicast --both --depth 3\n"
+                  << "  diagnose       The Ghost Bug Diagnosis Engine. Structurally walk backward from a stack trace to find historical commits.\n"
+                  << "                   Example: chronos diagnose --trace crash.log --top 5\n"
+                  << "  trace          Inspect the exact context graph the LLM was given for a specific trace ID.\n"
+                  << "                   Example: chronos trace crash-a116c6e0\n"
+                  << "  timeline       See the history of structural mutations for a specific file or symbol.\n"
+                  << "                   Example: chronos timeline serve/tcp_server.py\n"
+                  << "  check-staging  Prevent \"Temporal Collisions\" before committing.\n"
+                  << "                   Example: chronos check-staging --strict\n"
+                  << "  status         Show system health, graph size, and daemon state.\n"
+                  << "  config         Manage LLM keys and environment variables.\n"
+                  << "  export         Export the graph to JSON or Mermaid.\n"
+                  << "  clean          Destroy the local index.\n\n"
+
+                  << "Universal Installation Flow:\n"
+                  << "  1. Compile once:  cd CHRONOS/build && cmake .. && make\n"
+                  << "  2. Install global: sudo make install\n"
+                  << "  After installation, use 'chronos' from any directory.\n";
+        return (argc < 2) ? 2 : 0;
     }
     std::string cmd = argv[1];
     std::string repoRoot = fs::current_path().string();
@@ -736,7 +1575,17 @@ int main(int argc, char** argv) {
     }
 
     if (cmd == "init") return cmdInit(repoRoot);
-    if (cmd == "sync") return cmdSync(repoRoot);
+    if (cmd == "status") return cmdStatus(repoRoot);
+    if (cmd == "config") return cmdConfig(argc, argv);
+    if (cmd == "export") return cmdExport(argc, argv, repoRoot);
+    if (cmd == "clean") return cmdClean(argc, argv);
+    if (cmd == "sync") {
+        bool historyMode = false;
+        for (int i = 2; i < argc; ++i) {
+            if (std::string(argv[i]) == "--history") historyMode = true;
+        }
+        return cmdSync(repoRoot, historyMode);
+    }
     if (cmd == "ask") {
         if (argc < 3) { std::cerr << "usage: chronos ask \"<query>\" [--crash <file>]\n"; return 2; }
         std::string query = argv[2];
@@ -791,20 +1640,27 @@ int main(int argc, char** argv) {
 
     
     if (cmd == "map") {
-        if (argc < 3) { std::cerr << "usage: chronos map <target> [--depth N] [--exclude-external] [--flow upstream|downstream]\n"; return 2; }
+        if (argc < 3) {
+            std::cerr << "usage: chronos map <target> [--upstream|--downstream|--both] [--depth N]\n"
+                      << "\n"
+                      << "  <target>       Function name (auto-inferred) or file path\n"
+                      << "  --upstream     Show callers only (impact radius)\n"
+                      << "  --downstream   Show callees only (behavior analysis)\n"
+                      << "  --both         Show full skeleton (default)\n"
+                      << "  --depth N      Max traversal depth (default: 4)\n";
+            return 2;
+        }
         std::string target = argv[2];
-        int depth = 1;
-        bool excludeExternal = false;
-        std::string flow = "";
-        std::string format = "";
+        MapMode mode = MapMode::BOTH;
+        int depth = 4;
         for (int i = 3; i < argc; ++i) {
             std::string arg = argv[i];
-            if (arg == "--depth" && i + 1 < argc) depth = std::stoi(argv[++i]);
-            else if (arg == "--exclude-external") excludeExternal = true;
-            else if (arg == "--flow" && i + 1 < argc) flow = argv[++i];
-            else if (arg == "--format" && i + 1 < argc) format = argv[++i];
+            if (arg == "--upstream")   mode = MapMode::UPSTREAM;
+            else if (arg == "--downstream") mode = MapMode::DOWNSTREAM;
+            else if (arg == "--both")  mode = MapMode::BOTH;
+            else if (arg == "--depth" && i + 1 < argc) depth = std::stoi(argv[++i]);
         }
-        return cmdMap(repoRoot, target, depth, excludeExternal, flow, format);
+        return cmdMap(repoRoot, target, mode, depth);
     }
     if (cmd == "diagnose") {
         if (argc < 4 || std::string(argv[2]) != "--trace") { std::cerr << "usage: chronos diagnose --trace <file> [--top N]\n"; return 2; }

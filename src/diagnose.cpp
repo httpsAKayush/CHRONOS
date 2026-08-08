@@ -164,6 +164,45 @@ DiagnoseEngine::resolveFrame(const CrashFrame& frame) const {
         for (auto& s : seeds) addIfNew(s.nodeId);
     }
 
+    // Strategy 3: Hard Lexical Search (Keyword Matching)
+    // Extract alphabetical keywords >= 3 characters from the raw line
+    std::regex wordRe(R"([a-zA-Z_]{3,})");
+    auto wordsBegin = std::sregex_iterator(frame.rawLine.begin(), frame.rawLine.end(), wordRe);
+    auto wordsEnd = std::sregex_iterator();
+    
+    std::vector<std::string> keywords;
+    for (auto it = wordsBegin; it != wordsEnd; ++it) {
+        std::string kw = it->str();
+        std::transform(kw.begin(), kw.end(), kw.begin(), ::tolower);
+        if (kw != "the" && kw != "and" && kw != "for" && kw != "this" && kw != "that") {
+            keywords.push_back(kw);
+        }
+    }
+
+    for (const auto& kw : keywords) {
+        std::string sql = "SELECT id FROM nodes WHERE is_active=1 AND (lower(file_path) LIKE '%" + kw + "%' OR lower(symbol_name) LIKE '%" + kw + "%') "
+                          "UNION SELECT root_id FROM alias WHERE lower(old_id) LIKE '%" + kw + "%';";
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(codex_.raw(), sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            std::vector<std::string> matchedIds;
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char* s = (const char*)sqlite3_column_text(stmt, 0);
+                if (s) matchedIds.push_back(s);
+            }
+            sqlite3_finalize(stmt);
+            
+            // TF-IDF style rarity filter: if it matches too many things, it's noise!
+            if (!matchedIds.empty() && matchedIds.size() <= 10) {
+                for (const auto& id : matchedIds) {
+                    // Lexical Boosting: inject 10x copies to dominate the seed mass
+                    for (int i = 0; i < 10; ++i) {
+                        nodeIds.push_back(id);
+                    }
+                }
+            }
+        }
+    }
+
     return nodeIds;
 }
 
@@ -206,11 +245,37 @@ std::string DiagnoseEngine::buildDependencyPath(
                 }
             }
         }
-    }
+    }    auto resolveLabel = [&](const std::string& id) {
+        auto n = codex_.getNode(id);
+        if (!n) return id.substr(0, 8) + "...";
+        std::string file = n->file_path;
+        if (file.empty()) return id.substr(0, 8) + "...";
+        
+        std::string sym;
+        if (id.find("sym:") == 0) {
+            sym = id.substr(4);
+        } else {
+            sqlite3_stmt* stmt;
+            int rc = sqlite3_prepare_v2(codex_.raw(),
+                "SELECT old_id FROM alias WHERE root_id = ?1 AND old_id LIKE 'sym:%' LIMIT 1;",
+                -1, &stmt, nullptr);
+            if (rc == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const char* oldId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                    if (oldId) sym = std::string(oldId).substr(4);
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+        
+        if (sym.empty()) return file;
+        return file + " :: " + sym;
+    };
 
     if (!found) {
         // Return abbreviated path.
-        return crashNodeId + " → [structural hop] → " + targetNodeId;
+        return "  ▼ Crash Log Vector Match\n    ├─▶ [structural hop] ──> " + resolveLabel(targetNodeId);
     }
 
     // Reconstruct path.
@@ -223,13 +288,12 @@ std::string DiagnoseEngine::buildDependencyPath(
     std::reverse(path.begin(), path.end());
 
     std::ostringstream out;
-    for (size_t i = 0; i < path.size(); ++i) {
-        if (i > 0) {
-            std::string lbl = edgeLabel.count(path[i]) ? edgeLabel[path[i]] : "→";
-            out << " -[" << lbl << "]-> ";
-        }
-        // Show just a short id for readability.
-        out << path[i].substr(0, 8) << "...";
+    out << "  ▼ Crash Log Vector Match\n";
+    for (size_t i = 1; i < path.size(); ++i) { // skip index 0 if it's the crash node
+        std::string lbl = edgeLabel.count(path[i]) ? edgeLabel[path[i]] : "structural hop";
+        std::string prefix = (i == path.size() - 1) ? "    └─▶ [" : "    ├─▶ [";
+        out << prefix << lbl << "] ──> " << resolveLabel(path[i]);
+        if (i < path.size() - 1) out << "\n";
     }
     return out.str();
 }
@@ -476,6 +540,17 @@ DiagnoseResult DiagnoseEngine::diagnose(const std::string& crashLogText, int top
 
     result.ok = true;
     result.candidates = std::move(candidates);
+    
+    // Normalize scores so the top candidate is 100%
+    if (!result.candidates.empty()) {
+        double maxScore = result.candidates.front().score;
+        if (maxScore > 0.0) {
+            for (auto& c : result.candidates) {
+                c.score = (c.score / maxScore) * 100.0;
+            }
+        }
+    }
+
     return result;
 }
 

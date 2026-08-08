@@ -120,136 +120,176 @@ std::string findFirstIdentifier(TSNode node, const std::string& source) {
     return "";
 }
 
-void extractCalls(TSNode node, const std::string& source, std::vector<ExtractedCall>& out) {
+void extractCalls(TSNode rootNode, const std::string& source, std::vector<ExtractedCall>& out) {
     static const std::unordered_set<std::string> NOISE = {
         "print", "time", "len", "range", "int", "float", "str", "list", "dict", "set", "tuple", "bool",
         "type", "isinstance", "issubclass", "getattr", "setattr", "hasattr", "delattr", "open",
         "round", "sum", "min", "max", "abs", "enumerate", "zip", "map", "filter", "any", "all",
         "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "super"
     };
-    const char* type = ts_node_type(node);
-    std::string t(type);
-    if (t == "call_expression" || t == "call") {
-        if (ts_node_child_count(node) > 0) {
-            std::string target = findFirstIdentifier(ts_node_child(node, 0), source);
-            if (!target.empty()) {
-                ExtractedCall ec;
-                ec.target = target;
-                ec.start_line = ts_node_start_point(node).row + 1;
-                ec.is_noise = (NOISE.count(target) > 0);
-                
-                TSNode stmtNode = node;
-                TSNode parent = ts_node_parent(stmtNode);
-                while (!ts_node_is_null(parent)) {
-                    std::string pType(ts_node_type(parent));
-                    if (pType == "expression_statement" || pType == "assignment" || pType == "variable_declaration" || pType == "return_statement" || pType == "declaration") {
-                        stmtNode = parent;
-                        break;
+
+    std::vector<TSNode> stack;
+    stack.push_back(rootNode);
+
+    while (!stack.empty()) {
+        TSNode node = stack.back();
+        stack.pop_back();
+        if (ts_node_is_null(node)) continue;
+
+        const char* type = ts_node_type(node);
+        std::string t(type);
+        if (t == "call_expression" || t == "call") {
+            if (ts_node_child_count(node) > 0) {
+                std::string target = findFirstIdentifier(ts_node_child(node, 0), source);
+                if (!target.empty()) {
+                    ExtractedCall ec;
+                    ec.target = target;
+                    ec.start_line = ts_node_start_point(node).row + 1;
+                    ec.is_noise = (NOISE.count(target) > 0);
+                    
+                    TSNode stmtNode = node;
+                    TSNode parent = ts_node_parent(stmtNode);
+                    while (!ts_node_is_null(parent)) {
+                        std::string pType(ts_node_type(parent));
+                        if (pType == "expression_statement" || pType == "assignment" || pType == "variable_declaration" || pType == "return_statement" || pType == "declaration") {
+                            stmtNode = parent;
+                            break;
+                        }
+                        if (pType == "function_definition" || pType == "class_definition" || pType == "block") break;
+                        parent = ts_node_parent(parent);
                     }
-                    if (pType == "function_definition" || pType == "class_definition" || pType == "block") break;
-                    parent = ts_node_parent(parent);
-                }
-                ec.call_site_text = extractText(stmtNode, source);
-                
-                // Trim trailing newlines if any
-                while (!ec.call_site_text.empty() && (ec.call_site_text.back() == '\n' || ec.call_site_text.back() == '\r')) {
-                    ec.call_site_text.pop_back();
-                }
-                
-                out.push_back(ec);
-            }
-        }
-    }
-    uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; ++i) {
-        extractCalls(ts_node_child(node, i), source, out);
-    }
-}
-
-void extractImports(TSNode node, const std::string& source, std::vector<std::pair<std::string, std::string>>& imports) {
-    if (ts_node_is_null(node)) return;
-    std::string type = ts_node_type(node);
-    
-    if (type == "import_statement") {
-        for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
-            TSNode child = ts_node_child(node, i);
-            std::string ctype = ts_node_type(child);
-            if (ctype == "dotted_name") {
-                std::string mod = extractText(child, source);
-                if (!mod.empty()) imports.push_back({mod, mod});
-            } else if (ctype == "aliased_import") {
-                std::string alias;
-                std::string mod;
-                for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
-                    TSNode g = ts_node_child(child, j);
-                    std::string gtype = ts_node_type(g);
-                    if (gtype == "dotted_name") mod = extractText(g, source);
-                    else if (gtype == "identifier") alias = extractText(g, source);
-                }
-                if (!alias.empty() && !mod.empty()) imports.push_back({alias, mod});
-            }
-        }
-    } else if (type == "import_from_statement") {
-        std::string moduleName = "";
-        for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
-            TSNode child = ts_node_child(node, i);
-            std::string ctype = ts_node_type(child);
-            if (ctype == "dotted_name" && moduleName.empty()) {
-                moduleName = extractText(child, source);
-            } else if (ctype == "dotted_name" && !moduleName.empty()) {
-                std::string sym = extractText(child, source);
-                imports.push_back({sym, moduleName});
-            } else if (ctype == "aliased_import") {
-                std::string alias;
-                std::string orig;
-                for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
-                    TSNode g = ts_node_child(child, j);
-                    std::string gtype = ts_node_type(g);
-                    if (gtype == "dotted_name" || gtype == "identifier") {
-                        if (orig.empty()) orig = extractText(g, source);
-                        else alias = extractText(g, source);
+                    ec.call_site_text = extractText(stmtNode, source);
+                    
+                    // Trim trailing newlines if any
+                    while (!ec.call_site_text.empty() && (ec.call_site_text.back() == '\n' || ec.call_site_text.back() == '\r')) {
+                        ec.call_site_text.pop_back();
                     }
+                    
+                    out.push_back(ec);
                 }
-                if (!alias.empty()) imports.push_back({alias, moduleName});
-                else if (!orig.empty()) imports.push_back({orig, moduleName});
             }
         }
-    }
-    
-    uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; ++i) {
-        extractImports(ts_node_child(node, i), source, imports);
+        uint32_t count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < count; ++i) {
+            stack.push_back(ts_node_child(node, i));
+        }
     }
 }
 
-void collectTokens(TSNode node, std::vector<StructuralToken>& out) {
-    const char* type = ts_node_type(node);
-    std::string t(type);
-    // Skip pure identifier/type leaves; keep control structure & operators.
-    if (t != "identifier" && t != "type_identifier" && t != "field_identifier") {
-        out.push_back({t, 1});
-    }
-    uint32_t n = ts_node_child_count(node);
-    for (uint32_t i = 0; i < n; ++i) collectTokens(ts_node_child(node, i), out);
-}
+void extractImports(TSNode rootNode, const std::string& source, std::vector<std::pair<std::string, std::string>>& imports) {
+    std::vector<TSNode> stack;
+    stack.push_back(rootNode);
 
-void walk(TSNode node, const std::string& source, std::vector<FunctionSpan>& spans) {
-    std::string type(ts_node_type(node));
-    if (type == "function_definition" || type == "class_specifier" || type == "struct_specifier" || type == "class_definition") {
-        FunctionSpan span;
-        span.byteStart = ts_node_start_byte(node);
-        span.byteEnd = ts_node_end_byte(node);
-        span.name = findFirstIdentifier(node, source);
-        extractCalls(node, source, span.outgoingCalls);
-        collectTokens(node, span.tokens);
-        spans.push_back(std::move(span));
+    while (!stack.empty()) {
+        TSNode node = stack.back();
+        stack.pop_back();
+
+        if (ts_node_is_null(node)) continue;
+
+        std::string type = ts_node_type(node);
         
-        // Only return if it's a leaf structure to prevent over-nesting, but we want methods inside classes!
-        // So for classes, we should keep walking to find nested methods.
-        if (type == "function_definition") return;
+        if (type == "import_statement") {
+            for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
+                TSNode child = ts_node_child(node, i);
+                std::string ctype = ts_node_type(child);
+                if (ctype == "dotted_name") {
+                    std::string mod = extractText(child, source);
+                    if (!mod.empty()) imports.push_back({mod, mod});
+                } else if (ctype == "aliased_import") {
+                    std::string alias;
+                    std::string mod;
+                    for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
+                        TSNode g = ts_node_child(child, j);
+                        std::string gtype = ts_node_type(g);
+                        if (gtype == "dotted_name") mod = extractText(g, source);
+                        else if (gtype == "identifier") alias = extractText(g, source);
+                    }
+                    if (!alias.empty() && !mod.empty()) imports.push_back({alias, mod});
+                }
+            }
+        } else if (type == "import_from_statement") {
+            std::string moduleName = "";
+            for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
+                TSNode child = ts_node_child(node, i);
+                std::string ctype = ts_node_type(child);
+                if (ctype == "dotted_name" && moduleName.empty()) {
+                    moduleName = extractText(child, source);
+                } else if (ctype == "dotted_name" && !moduleName.empty()) {
+                    std::string sym = extractText(child, source);
+                    imports.push_back({sym, moduleName});
+                } else if (ctype == "aliased_import") {
+                    std::string alias;
+                    std::string orig;
+                    for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
+                        TSNode g = ts_node_child(child, j);
+                        std::string gtype = ts_node_type(g);
+                        if (gtype == "dotted_name" || gtype == "identifier") {
+                            if (orig.empty()) orig = extractText(g, source);
+                            else alias = extractText(g, source);
+                        }
+                    }
+                    if (!alias.empty()) imports.push_back({alias, moduleName});
+                    else if (!orig.empty()) imports.push_back({orig, moduleName});
+                }
+            }
+        }
+        
+        uint32_t count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < count; ++i) {
+            stack.push_back(ts_node_child(node, i));
+        }
     }
-    uint32_t n = ts_node_child_count(node);
-    for (uint32_t i = 0; i < n; ++i) walk(ts_node_child(node, i), source, spans);
+}
+
+void collectTokens(TSNode rootNode, std::vector<StructuralToken>& out) {
+    std::vector<TSNode> stack;
+    stack.push_back(rootNode);
+    while (!stack.empty()) {
+        TSNode node = stack.back();
+        stack.pop_back();
+        if (ts_node_is_null(node)) continue;
+
+        const char* type = ts_node_type(node);
+        std::string t(type);
+        // Skip pure identifier/type leaves; keep control structure & operators.
+        if (t != "identifier" && t != "type_identifier" && t != "field_identifier") {
+            out.push_back({t, 1});
+        }
+        uint32_t n = ts_node_child_count(node);
+        for (uint32_t i = 0; i < n; ++i) {
+            stack.push_back(ts_node_child(node, n - 1 - i));
+        }
+    }
+}
+
+void walk(TSNode rootNode, const std::string& source, std::vector<FunctionSpan>& spans) {
+    std::vector<TSNode> stack;
+    stack.push_back(rootNode);
+
+    while (!stack.empty()) {
+        TSNode node = stack.back();
+        stack.pop_back();
+        if (ts_node_is_null(node)) continue;
+
+        std::string type(ts_node_type(node));
+        if (type == "function_definition" || type == "class_specifier" || type == "struct_specifier" || type == "class_definition") {
+            FunctionSpan span;
+            span.byteStart = ts_node_start_byte(node);
+            span.byteEnd = ts_node_end_byte(node);
+            span.name = findFirstIdentifier(node, source);
+            extractCalls(node, source, span.outgoingCalls);
+            collectTokens(node, span.tokens);
+            spans.push_back(std::move(span));
+            
+            // Only return if it's a leaf structure to prevent over-nesting, but we want methods inside classes!
+            // So for classes, we should keep walking to find nested methods.
+            if (type == "function_definition") continue;
+        }
+        uint32_t n = ts_node_child_count(node);
+        for (uint32_t i = 0; i < n; ++i) {
+            stack.push_back(ts_node_child(node, n - 1 - i));
+        }
+    }
 }
 }
 #endif

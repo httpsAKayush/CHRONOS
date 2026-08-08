@@ -281,130 +281,160 @@ int AstMutationScorer::scoreDiff(const std::string& oldContent, const std::strin
     if (ext.empty()) ext = extension;
     for (char &c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    auto extractSignatures = [&ext](const std::vector<std::string>& tokens) {
-        std::vector<std::string> sigs;
+    auto extractDeclarations = [&ext](const std::vector<std::string>& tokens) {
+        std::unordered_set<std::string> decls;
         if (ext == ".py" || ext == ".pyi" || ext == ".sh") {
             bool inDefOrClass = false;
-            bool inInit = false;
+            bool inImport = false;
+            std::string currentDecl = "";
             int parenDepth = 0;
             for (size_t i = 0; i < tokens.size(); ++i) {
                 const auto& t = tokens[i];
                 if (t == "def" || t == "class") {
                     inDefOrClass = true;
-                    inInit = false;
                     parenDepth = 0;
-                    sigs.push_back(t);
+                    currentDecl = t;
                     continue;
                 }
+                if (t == "import" || t == "from") {
+                    inImport = true;
+                    currentDecl = t;
+                    continue;
+                }
+                
                 if (inDefOrClass) {
                     if (t == ":") {
-                        sigs.push_back(t);
+                        decls.insert(currentDecl);
                         inDefOrClass = false;
-                        inInit = false;
+                        currentDecl = "";
                         continue;
                     }
-                    if (t == "(") {
-                        parenDepth++;
-                        sigs.push_back(t);
-                        continue;
+                    if (t == "(") parenDepth++;
+                    if (t == ")") if (parenDepth > 0) parenDepth--;
+                    if (t == "=" || t == "->") continue; // skip defaults and return types to focus on signature
+                    if (!isStringLiteralToken(t) && !isRawNumberToken(t)) {
+                        currentDecl += " " + t;
                     }
-                    if (t == ")") {
-                        if (parenDepth > 0) parenDepth--;
-                        inInit = false;
-                        sigs.push_back(t);
-                        continue;
+                } else if (inImport) {
+                    if (t == "\n" || t == ";") { // Although we stripped newlines, wait, tokenize strips newlines. 
+                        // imports in python are usually one line. Since newlines are stripped, this is tricky.
+                        // For python imports, we might just grab the next 1-3 tokens.
                     }
-                    if (t == "=") {
-                        inInit = true;
-                        sigs.push_back(t);
-                        continue;
+                    // Since python imports without newlines are hard to terminate, we'll just capture the module name:
+                    if (currentDecl.size() < 30) {
+                        currentDecl += " " + t;
+                    } else {
+                        decls.insert(currentDecl);
+                        inImport = false;
                     }
-                    if (t == ",") {
-                        inInit = false;
-                        sigs.push_back(t);
-                        continue;
-                    }
-                    if (inInit) {
-                        continue; // Skip initializer values after =
-                    }
-                    if (isStringLiteralToken(t) || isRawNumberToken(t)) {
-                        continue; // Skip literals and numbers
-                    }
-                    sigs.push_back(t);
                 }
             }
+            if (inImport && !currentDecl.empty()) decls.insert(currentDecl);
         } else {
+            // C++/Java/TS/etc.
             int depth = 0;
-            bool inInit = false;
+            std::string currentDecl = "";
             int parenDepth = 0;
-            int bracketDepth = 0;
+            bool isFunc = false;
+            bool isClass = false;
 
-            for (const auto& t : tokens) {
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                const auto& t = tokens[i];
                 if (t == "{") {
-                    if (depth == 0) {
-                        sigs.push_back("{");
+                    if (depth == 0 && !currentDecl.empty()) {
+                        decls.insert(currentDecl);
                     }
                     depth++;
-                    inInit = false;
+                    currentDecl = "";
+                    isFunc = false;
+                    isClass = false;
+                    parenDepth = 0;
                 } else if (t == "}") {
                     if (depth > 0) depth--;
-                    if (depth == 0) {
-                        sigs.push_back("}");
-                    }
-                    inInit = false;
                 } else if (depth == 0) {
-                    if (t == "=") {
-                        inInit = true;
-                        parenDepth = 0;
-                        bracketDepth = 0;
-                        sigs.push_back(t);
-                        continue;
-                    }
-
-                    if (inInit) {
-                        if (t == "(") {
-                            parenDepth++;
-                        } else if (t == ")") {
-                            if (parenDepth > 0) parenDepth--;
-                            else inInit = false;
-                        } else if (t == "[") {
-                            bracketDepth++;
-                        } else if (t == "]") {
-                            if (bracketDepth > 0) bracketDepth--;
-                        } else if (t == ";" || t == ",") {
-                            if (parenDepth == 0 && bracketDepth == 0) {
-                                inInit = false;
-                            }
+                    if (t == "class" || t == "struct" || t == "interface") {
+                        isClass = true;
+                        currentDecl = t;
+                    } else if (t == "import" || t == "#include" || t == "using") {
+                        // Capture import up to semicolon
+                        std::string imp = t;
+                        size_t j = i + 1;
+                        while (j < tokens.size() && tokens[j] != ";" && tokens[j] != "{" && imp.size() < 50) {
+                            imp += " " + tokens[j];
+                            j++;
                         }
-
-                        if (inInit) {
-                            continue;
+                        decls.insert(imp);
+                        i = j;
+                    } else if (t == "(") {
+                        parenDepth++;
+                        currentDecl += " " + t;
+                        isFunc = true;
+                    } else if (t == ")") {
+                        if (parenDepth > 0) parenDepth--;
+                        currentDecl += " " + t;
+                    } else if (t == ";" || t == "=") {
+                        currentDecl = "";
+                        isFunc = false;
+                        isClass = false;
+                    } else {
+                        if (isClass || isFunc || currentDecl.empty()) {
+                            if (!currentDecl.empty()) currentDecl += " ";
+                            currentDecl += t;
                         } else {
-                            sigs.push_back(t);
-                            continue;
+                            currentDecl += " " + t;
                         }
                     }
-
-                    if (isStringLiteralToken(t) || isRawNumberToken(t)) {
-                        continue;
-                    }
-
-                    sigs.push_back(t);
                 }
             }
         }
-        return sigs;
+        return decls;
     };
 
-    std::vector<std::string> oldSigs = extractSignatures(oldTokens);
-    std::vector<std::string> newSigs = extractSignatures(newTokens);
+    std::unordered_set<std::string> oldSet = extractDeclarations(oldTokens);
+    std::unordered_set<std::string> newSet = extractDeclarations(newTokens);
+    
+    int score = 0;
 
-    if (oldSigs != newSigs) {
-        return 10; // Signature modified, function added/removed, or global declaration changed
+    auto scoreDeclaration = [](const std::string& decl) -> int {
+        if (decl.find("class ") == 0 || decl.find("struct ") == 0) return 40;
+        if (decl.find("import ") == 0 || decl.find("from ") == 0 || decl.find("#include ") == 0) return 25;
+        if (decl.find("def ") == 0 || decl.find("fn ") == 0 || decl.find("func ") == 0) return 15;
+        // Function signatures in C++ don't always start with a keyword.
+        if (decl.find("(") != std::string::npos && decl.find(")") != std::string::npos) return 15;
+        return 10;
+    };
+
+    for (const auto& decl : oldSet) {
+        if (!newSet.count(decl)) {
+            score += scoreDeclaration(decl);
+        }
+    }
+    for (const auto& decl : newSet) {
+        if (!oldSet.count(decl)) {
+            score += scoreDeclaration(decl);
+        }
     }
 
-    // Otherwise, internal logic change inside function body
-    return 1;
+    // Low-Weight Internal Logic (Frequency Tally)
+    auto tallyTokens = [](const std::vector<std::string>& tokens) {
+        int ops = 0, control = 0, vars = 0;
+        for (const auto& t : tokens) {
+            if (t == "+" || t == "-" || t == "*" || t == "/" || t == "==" || t == "!=") ops++;
+            else if (t == "if" || t == "else" || t == "while" || t == "for" || t == "switch") control++;
+            else if (t == "=" || t == "+=" || t == "-=") vars++;
+        }
+        return std::make_tuple(ops, control, vars);
+    };
+
+    auto [oldOps, oldCtrl, oldVars] = tallyTokens(oldTokens);
+    auto [newOps, newCtrl, newVars] = tallyTokens(newTokens);
+
+    score += std::abs(oldOps - newOps) * 1;
+    score += std::abs(oldCtrl - newCtrl) * 2;
+    score += std::abs(oldVars - newVars) * 1;
+
+    return score;
+
 }
 
 } // namespace chronos
