@@ -55,79 +55,76 @@ void Codex::migrate() {
     }
     if (userVersion >= kSchemaVersion) return;
 
-    if (userVersion > 0 && userVersion < 3) {
-        // v2 -> v3 migrations
-        // We catch errors in case the column already exists (e.g. partial migration)
-        sqlite3_exec(db_, "ALTER TABLE edges ADD COLUMN call_site_text TEXT;", nullptr, nullptr, nullptr);
-        sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN ai_summary TEXT;", nullptr, nullptr, nullptr);
-    }
+    if (userVersion == 0) {
+        execOrThrow(db_, R"SQL(
+            BEGIN;
 
-    execOrThrow(db_, R"SQL(
-        BEGIN;
+            CREATE TABLE IF NOT EXISTS nodes (
+                id               TEXT PRIMARY KEY,
+                file_path        TEXT NOT NULL,
+                byte_start       INTEGER NOT NULL,
+                byte_end         INTEGER NOT NULL,
+                simhash          INTEGER NOT NULL,
+                is_active        INTEGER NOT NULL,
+                parse_confidence REAL NOT NULL,
+                ai_summary       TEXT
+            );
 
-        CREATE TABLE IF NOT EXISTS nodes (
-            id               TEXT PRIMARY KEY,
-            file_path        TEXT NOT NULL,
-            byte_start       INTEGER NOT NULL,
-            byte_end         INTEGER NOT NULL,
-            simhash          INTEGER NOT NULL,
-            is_active        INTEGER NOT NULL,
-            parse_confidence REAL NOT NULL,
-            ai_summary       TEXT
-        );
+            CREATE TABLE IF NOT EXISTS history (
+                node_id       TEXT NOT NULL,
+                commit_hash   TEXT NOT NULL,
+                timestamp     INTEGER NOT NULL,
+                synthetic_msg TEXT,
+                PRIMARY KEY(node_id, commit_hash)
+            );
 
-        CREATE TABLE IF NOT EXISTS history (
-            node_id       TEXT NOT NULL,
-            commit_hash   TEXT NOT NULL,
-            timestamp     INTEGER NOT NULL,
-            synthetic_msg TEXT,
-            PRIMARY KEY(node_id, commit_hash)
-        );
+            CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);
+            CREATE INDEX IF NOT EXISTS idx_nodes_simhash ON nodes(simhash);
 
-        CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);
-        CREATE INDEX IF NOT EXISTS idx_nodes_simhash ON nodes(simhash);
+            CREATE TABLE IF NOT EXISTS edges (
+                source_id  TEXT NOT NULL REFERENCES nodes(id),
+                target_id  TEXT NOT NULL REFERENCES nodes(id),
+                type       TEXT NOT NULL,
+                probable_target_weight REAL NOT NULL DEFAULT 1.0,
+                start_line INTEGER DEFAULT 0,
+                call_site_text TEXT,
+                PRIMARY KEY (source_id, target_id, type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
+            CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 
-        CREATE TABLE IF NOT EXISTS edges (
-            source_id  TEXT NOT NULL REFERENCES nodes(id),
-            target_id  TEXT NOT NULL REFERENCES nodes(id),
-            type       TEXT NOT NULL,
-            probable_target_weight REAL NOT NULL DEFAULT 1.0,
-            start_line INTEGER DEFAULT 0,
-            call_site_text TEXT,
-            PRIMARY KEY (source_id, target_id, type)
-        );
-        CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+            CREATE TABLE IF NOT EXISTS alias (
+                old_id      TEXT PRIMARY KEY,
+                new_id      TEXT NOT NULL,
+                root_id     TEXT NOT NULL,
+                commit_hash TEXT NOT NULL
+            );
 
+            CREATE TABLE IF NOT EXISTS trace_log (
+                trace_id       TEXT PRIMARY KEY,
+                node_ids_json  TEXT NOT NULL,
+                created_at     INTEGER NOT NULL
+            );
 
-        -- Path-compressed alias DAG (union-find). `root_id` is maintained
-        -- eagerly on write so resolveAlias is a single indexed lookup.
-        CREATE TABLE IF NOT EXISTS alias (
-            old_id      TEXT PRIMARY KEY,
-            new_id      TEXT NOT NULL,
-            root_id     TEXT NOT NULL,
-            commit_hash TEXT NOT NULL
-        );
+            CREATE TABLE IF NOT EXISTS file_imports (
+                file_path TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                source_module TEXT NOT NULL,
+                PRIMARY KEY(file_path, symbol_name)
+            );
 
-        CREATE TABLE IF NOT EXISTS trace_log (
-            trace_id       TEXT PRIMARY KEY,
-            node_ids_json  TEXT NOT NULL,
-            created_at     INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS file_imports (
-            file_path TEXT NOT NULL,
-            symbol_name TEXT NOT NULL,
-            source_module TEXT NOT NULL,
-            PRIMARY KEY(file_path, symbol_name)
-        );
-
-        COMMIT;
-    )SQL");
-    
-    if (userVersion < 2) {
-        execOrThrow(db_, "ALTER TABLE nodes ADD COLUMN ai_summary TEXT;");
-        execOrThrow(db_, "ALTER TABLE edges ADD COLUMN start_line INTEGER DEFAULT 0;");
+            COMMIT;
+        )SQL");
+    } else {
+        if (userVersion == 1) {
+            sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN ai_summary TEXT;", nullptr, nullptr, nullptr);
+            sqlite3_exec(db_, "ALTER TABLE edges ADD COLUMN start_line INTEGER DEFAULT 0;", nullptr, nullptr, nullptr);
+        }
+        if (userVersion < 3) {
+            sqlite3_exec(db_, "ALTER TABLE edges ADD COLUMN call_site_text TEXT;", nullptr, nullptr, nullptr);
+            // ai_summary was added in v2, but if userVersion < 3 (i.e. v2), it's already there. 
+            // the previous implementation tried to add ai_summary in v2->v3 which caused errors.
+        }
     }
 
     execOrThrow(db_, "PRAGMA user_version = " + std::to_string(kSchemaVersion) + ";");
@@ -328,6 +325,24 @@ std::string Codex::resolveAlias(const std::string& id) {
         result = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
     }
     sqlite3_finalize(stmt);
+    
+    if (id.find("sym:") == 0) {
+        if (result == id) {
+            throw std::runtime_error("Error: Function not found in Codex graph");
+        }
+        
+        sqlite3_stmt* nStmt;
+        sqlite3_prepare_v2(db_, "SELECT byte_start FROM nodes WHERE id = ?1;", -1, &nStmt, nullptr);
+        sqlite3_bind_text(nStmt, 1, result.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(nStmt) == SQLITE_ROW) {
+            if (sqlite3_column_int64(nStmt, 0) == 0) {
+                sqlite3_finalize(nStmt);
+                throw std::runtime_error("Error: Function not found in Codex graph");
+            }
+        }
+        sqlite3_finalize(nStmt);
+    }
+    
     return result;
 }
 

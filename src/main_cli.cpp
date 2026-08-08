@@ -1,3 +1,5 @@
+#include <linux/limits.h>
+#include <unistd.h>
 // chronos: the Querier CLI/TUI (Spec §5 Interaction Model). Deliberately a
 // CLI, not an IDE plugin (Spec §2 non-goal), to keep zero coupling with
 // heavy IDE environments.
@@ -31,6 +33,7 @@
 #include "chronos/ast_indexer.hpp"
 #include "chronos/ast_mutation_scorer.hpp"
 #include "chronos/env.hpp"
+#include "chronos/diagnose.hpp"
 
 namespace fs = std::filesystem;
 using namespace chronos;
@@ -106,7 +109,9 @@ int cmdSync(const std::string& repoRoot) {
     return 0;
 }
 
-int cmdAsk(const std::string& repoRoot, const std::string& query) {
+static std::string readSnippetForNode(const chronos::Node& n, const std::string& repoRoot);
+
+int cmdAsk(const std::string& repoRoot, const std::string& query, const std::string& crashLogFile = "") {
     Codex codex(repoRoot);
     VectorIndex vectors(repoRoot);
     ContextBuilder builder(codex, vectors, repoRoot);
@@ -118,8 +123,11 @@ int cmdAsk(const std::string& repoRoot, const std::string& query) {
     bool daemonUp = client.connect(sockPath);
     if (!daemonUp) {
         // Cold-start: spawn chronos-daemon detached, then retry the connect
-        // a few times (Spec §0: "TUI boots daemon on-demand").
-        std::string cmd = "chronos-daemon \"" + repoRoot + "\" >/dev/null 2>&1 &";
+        char buf[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        std::string exeDir = (len != -1) ? fs::path(std::string(buf, len)).parent_path().string() : "";
+        std::string daemonPath = exeDir.empty() ? "chronos-daemon" : (exeDir + "/chronos-daemon");
+        std::string cmd = daemonPath + " \"" + repoRoot + "\" >/dev/null 2>&1 &";
         std::system(cmd.c_str());
         for (int i = 0; i < 20 && !daemonUp; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -128,7 +136,59 @@ int cmdAsk(const std::string& repoRoot, const std::string& query) {
     }
 
     std::cout << "[2/3] Analyzing graph...\n";
-    BuildResult built = builder.build(query);
+    BuildResult built;
+    
+    if (!crashLogFile.empty()) {
+        std::ifstream file(crashLogFile);
+        if (!file.is_open()) {
+            std::cerr << "[!] Could not open crash log: " << crashLogFile << "\n";
+            return 1;
+        }
+        std::string crashText((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        
+        DiagnoseEngine engine(codex, vectors, repoRoot);
+        auto diagResult = engine.diagnose(crashText, 1);
+        
+        if (!diagResult.ok || diagResult.candidates.empty()) {
+            std::cerr << "[!] Diagnosis engine failed to find candidates. Falling back to normal ask...\n";
+            built = builder.build(query);
+        } else {
+            auto& topCand = diagResult.candidates.front();
+            
+            // Extract raw AST code
+            std::string culpritCode;
+            auto node = codex.getNode(topCand.nodeId);
+            if (node) {
+                culpritCode = readSnippetForNode(*node, repoRoot);
+            }
+            
+            // Extract git diff
+            std::string diffCmd = "git -C \"" + repoRoot + "\" log -p -1 " + topCand.commitHash + " -- \"" + topCand.filePath + "\" 2>/dev/null";
+            char buf[2048];
+            std::string gitDiff;
+            FILE* pipe = popen(diffCmd.c_str(), "r");
+            if (pipe) {
+                while (fgets(buf, sizeof(buf), pipe)) gitDiff += buf;
+                pclose(pipe);
+            }
+            
+            // Construct the Goldilocks Payload
+            std::ostringstream payload;
+            payload << "You are an expert debugger. Determine if this is a codebase bug or a system/environment issue.\n\n";
+            payload << "--- CRASH LOG ---\n" << crashText << "\n\n";
+            payload << "--- CULPRIT NODE (" << topCand.nodeId << ") AST ---\n" << culpritCode << "\n\n";
+            payload << "--- RECENT GIT HISTORY FOR " << topCand.filePath << " ---\n" << gitDiff << "\n\n";
+            payload << "--- USER QUERY ---\n" << query << "\n";
+            
+            // We bypass the standard context builder and just send the payload directly
+            built.ok = true;
+            built.request.userQuery = payload.str();
+            built.request.traceId = "crash-" + topCand.commitHash;
+        }
+    } else {
+        built = builder.build(query);
+    }
+
     if (!built.ok) {
         std::cout << built.reason << "\n";
         return 0;
@@ -376,6 +436,290 @@ int cmdCheckStaging(const std::string& repoRoot, bool strictMode = false) {
     return 0;
 }
 
+
+static std::string readSnippetForNode(const chronos::Node& n, const std::string& repoRoot) {
+    std::string path = repoRoot + "/" + n.file_path;
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return "";
+    int64_t len = n.byte_end - n.byte_start;
+    if (len <= 0) return "";
+    f.seekg(n.byte_start);
+    std::string snippet(len, '\0');
+    f.read(&snippet[0], len);
+    return snippet;
+}
+
+int cmdMap(const std::string& repoRoot, const std::string& target, int depth, bool excludeExternal, const std::string& flow, const std::string& format) {
+    Codex codex(repoRoot);
+    std::string rootId;
+    try {
+        rootId = codex.resolveAlias(target);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
+    auto startNode = codex.getNode(rootId);
+    if (!startNode) {
+        std::cerr << "chronos map: unknown target '" << target << "'\n";
+        return 1;
+    }
+    
+    // Pass 1: Collect nodes to summarize
+    std::set<std::string> nodesToPrint;
+    std::set<std::string> visitedCollect;
+    
+    std::function<void(const std::string&, int, bool)> collectTree = 
+        [&](const std::string& currentEdgeId, int currentDepth, bool isIncoming) {
+        if (currentDepth > depth) return;
+        std::string resolvedId = codex.resolveAlias(currentEdgeId);
+        
+        visitedCollect.insert(resolvedId);
+        nodesToPrint.insert(resolvedId);
+        if (currentDepth == depth) { visitedCollect.erase(resolvedId); return; }
+        
+        std::vector<Edge> edges = codex.getEdges(resolvedId, !isIncoming);
+        for (const auto& edge : edges) {
+            if (excludeExternal && edge.type == "external_symbol") continue;
+            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
+            std::string nextResolvedId;
+            try {
+                nextResolvedId = codex.resolveAlias(nextId);
+            } catch (const std::exception&) {
+                continue;
+            }
+            if (!visitedCollect.count(nextResolvedId)) {
+                collectTree(nextResolvedId, currentDepth + 1, isIncoming);
+            }
+        }
+        visitedCollect.erase(resolvedId);
+    };
+
+    if (flow == "upstream" || flow == "") collectTree(startNode->id, 0, true);
+    if (flow == "downstream" || flow == "") collectTree(startNode->id, 0, false);
+    
+    // Batch summarize
+    ChronosRequest req;
+    req.command = "summarize";
+    req.traceId = "map_summary";
+    for (const auto& nid : nodesToPrint) {
+        auto n = codex.getNode(nid);
+        if (n && n->ai_summary.empty() && n->is_active && n->file_path != "external_symbol") {
+            ContextNode cn;
+            cn.nodeId = nid;
+            cn.filePath = n->file_path;
+            cn.codeSnippet = readSnippetForNode(*n, repoRoot);
+            req.context.push_back(cn);
+        }
+    }
+    
+    if (!req.context.empty()) {
+        IpcClient client;
+        if (client.connect(socketPathForRepo(repoRoot))) {
+            std::string fullResponse;
+            client.sendAndStream(req, [&](const ChronosResponseChunk& chunk) {
+                fullResponse += chunk.textDelta;
+            });
+            std::istringstream stream(fullResponse);
+            std::string line;
+            while (std::getline(stream, line)) {
+                size_t pos = line.find('|');
+                if (pos != std::string::npos) {
+                    std::string nid = line.substr(0, pos);
+                    std::string summary = line.substr(pos + 1);
+                    if (!summary.empty() && summary.back() == '\r') summary.pop_back();
+                    if (!summary.empty() && summary.front() == ' ') summary = summary.substr(1);
+                    codex.updateAiSummary(nid, summary);
+                }
+            }
+        } else {
+            std::cerr << "[!] Could not connect to Chronos daemon. Summaries will be missing.\n";
+        }
+    }
+
+    std::cout << "\nArchitect Map for " << target << " [node:" << startNode->id.substr(0, 8) << "]\n";
+    std::cout << "========================================================\n";
+
+    std::set<std::string> visitedPrint;
+    
+    std::function<void(const std::string&, int, bool, const std::string&)> printTree = 
+        [&](const std::string& currentEdgeId, int currentDepth, bool isIncoming, const std::string& edgeText) {
+        
+        std::string resolvedId;
+        try {
+            resolvedId = codex.resolveAlias(currentEdgeId);
+        } catch (const std::exception&) {
+            return;
+        }
+        
+        // Indentation logic
+        std::string prefix = "";
+        for (int i = 0; i < currentDepth; ++i) {
+            if (i == currentDepth - 1) prefix += " ├── ";
+            else prefix += " │   ";
+        }
+        
+        if (currentDepth == 0) {
+            std::cout << (isIncoming ? "[UPSTREAM DATA FLOW]\n" : "[DOWNSTREAM DATA FLOW]\n");
+        } else {
+            // Print the edge call site
+            std::cout << prefix << edgeText << "\n";
+            
+            // Print AI sticky note below it if available
+            auto node = codex.getNode(resolvedId);
+            if (node && !node->ai_summary.empty()) {
+                std::string summaryPrefix = "";
+                for (int i = 0; i < currentDepth; ++i) {
+                    if (i == currentDepth - 1) summaryPrefix += " │   ";
+                    else summaryPrefix += " │   ";
+                }
+                std::cout << summaryPrefix << "  \033[90m[" << node->ai_summary << "]\033[0m\n";
+            }
+            std::cout << " │\n";
+        }
+
+        if (currentDepth >= depth) return;
+        
+        visitedPrint.insert(resolvedId);
+        
+        std::vector<Edge> edges = codex.getEdges(resolvedId, !isIncoming);
+        
+        // Filter and collect child edges
+        std::vector<Edge> children;
+        for (const auto& edge : edges) {
+            if (excludeExternal && edge.type == "external_symbol") continue;
+            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
+            std::string nextResolvedId;
+            try {
+                nextResolvedId = codex.resolveAlias(nextId);
+            } catch (const std::exception&) {
+                children.push_back(edge);
+                continue;
+            }
+            if (!visitedPrint.count(nextResolvedId)) {
+                children.push_back(edge);
+            }
+        }
+        
+        for (size_t i = 0; i < children.size(); ++i) {
+            const auto& edge = children[i];
+            std::string nextId = isIncoming ? edge.source_id : edge.target_id;
+            
+            std::string site = edge.call_site_text;
+            if (site.empty()) {
+                auto targetNode = codex.getNode(nextId);
+                std::string targetName;
+                if (nextId.find("sym:") == 0) {
+                    std::string funcName = nextId.substr(4);
+                    targetName = funcName + "() in " + (targetNode ? targetNode->file_path : "unknown file");
+                } else {
+                    targetName = targetNode ? targetNode->file_path : nextId.substr(0,8);
+                }
+                site = "call to " + targetName;
+            }
+            std::string lineStr = edge.start_line > 0 ? "[Line " + std::to_string(edge.start_line) + "] ──> " : "";
+            std::string eText = lineStr + site;
+            
+            printTree(nextId, currentDepth + 1, isIncoming, eText);
+        }
+        
+        visitedPrint.erase(resolvedId);
+    };
+
+    if (flow == "upstream" || flow == "") {
+        printTree(startNode->id, 0, true, "");
+        std::cout << "\n";
+    }
+    if (flow == "downstream" || flow == "") {
+        printTree(startNode->id, 0, false, "");
+    }
+    
+    return 0;
+}
+
+int cmdExplain(const std::string& repoRoot, const std::string& targetSymbol, const std::string& query) {
+    Codex codex(repoRoot);
+    VectorIndex vectors(repoRoot);
+    ContextBuilder builder(codex, vectors, repoRoot);
+    Oracle oracle(codex, repoRoot);
+
+    std::cout << "[1/3] Waking daemon...\n";
+    std::string sockPath = socketPathForRepo(repoRoot);
+    IpcClient client;
+    bool daemonUp = client.connect(sockPath);
+    if (!daemonUp) {
+        char buf[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        std::string exeDir = (len != -1) ? fs::path(std::string(buf, len)).parent_path().string() : "";
+        std::string daemonPath = exeDir.empty() ? "chronos-daemon" : (exeDir + "/chronos-daemon");
+        std::string cmd = daemonPath + " \"" + repoRoot + "\" >/dev/null 2>&1 &";
+        std::system(cmd.c_str());
+        for (int i = 0; i < 20 && !daemonUp; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            daemonUp = client.connect(sockPath);
+        }
+    }
+
+    std::cout << "[2/3] Analyzing structure...\n";
+    BuildResult built = builder.buildExplain(targetSymbol, query);
+
+    if (!built.ok) {
+        std::cout << built.reason << "\n";
+        return 1;
+    }
+
+    if (!daemonUp) {
+        std::cout << "[!] LLM daemon unavailable -- falling back to Oracle-Only Mode.\n\n";
+        std::cout << oracle.renderTrace(built.rawTrace);
+        return 0;
+    }
+
+    std::cout << "[3/3] Interrogating Codebase...\n\n";
+    std::string fullResponse;
+    client.sendAndStream(built.request, [&](const ChronosResponseChunk& chunk) {
+        std::cout << chunk.textDelta << std::flush;
+        fullResponse += chunk.textDelta;
+    });
+
+    std::cout << "\n\nTraceability ID: " << built.request.traceId << "  (run `chronos trace " << built.request.traceId << "` later)\n";
+    return 0;
+}
+
+int cmdDiagnose(const std::string& repoRoot, const std::string& traceFile, int topN = 10) {
+    Codex codex(repoRoot);
+    VectorIndex vectors(repoRoot);
+    DiagnoseEngine engine(codex, vectors, repoRoot);
+
+    std::ifstream file(traceFile);
+    if (!file.is_open()) {
+        std::cerr << "chronos diagnose: could not open trace file " << traceFile << "\n";
+        return 1;
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    
+    auto result = engine.diagnose(buffer.str(), topN);
+    if (!result.ok) {
+        std::cerr << "chronos diagnose failed: " << result.reason << "\n";
+        return 1;
+    }
+    
+    std::cout << "Diagnosing Crash Trace...\n";
+    std::cout << "Resolved Frames: " << result.crashSummary << "\n\n";
+    std::cout << "Top Suspects:\n";
+    for (size_t i = 0; i < result.candidates.size(); ++i) {
+        const auto& c = result.candidates[i];
+        std::cout << "Suspect #" << (i+1) << ": [Score: " << c.score << "]\n";
+        std::cout << "  Commit: " << c.commitHash << " (" << c.timestamp << ")\n";
+        std::cout << "  Message: " << c.commitMessage << "\n";
+        if (c.hasDeferredWork) {
+            std::cout << "  [!] Deferred Work Detected\n";
+        }
+        std::cout << "  Path: " << c.dependencyPath << "\n\n";
+    }
+    
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -394,8 +738,34 @@ int main(int argc, char** argv) {
     if (cmd == "init") return cmdInit(repoRoot);
     if (cmd == "sync") return cmdSync(repoRoot);
     if (cmd == "ask") {
-        if (argc < 3) { std::cerr << "usage: chronos ask \"<query>\"\n"; return 2; }
-        return cmdAsk(repoRoot, argv[2]);
+        if (argc < 3) { std::cerr << "usage: chronos ask \"<query>\" [--crash <file>]\n"; return 2; }
+        std::string query = argv[2];
+        std::string crashFile;
+        
+        size_t crashPos = query.find("--crash");
+        if (crashPos != std::string::npos) {
+            std::string rem = query.substr(crashPos);
+            query = query.substr(0, crashPos);
+            if (rem == "--crash" && argc > 3) {
+                crashFile = argv[3];
+            } else if (rem.length() > 7 && rem[7] == '=') {
+                crashFile = rem.substr(8);
+            } else if (rem.length() > 7) {
+                crashFile = rem.substr(7);
+            }
+        } else {
+            for (int i = 3; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--crash" && i + 1 < argc) {
+                    crashFile = argv[++i];
+                } else if (arg.rfind("--crash=", 0) == 0) {
+                    crashFile = arg.substr(8);
+                } else if (arg.length() > 7 && arg.substr(0, 7) == "--crash") {
+                    crashFile = arg.substr(7);
+                }
+            }
+        }
+        return cmdAsk(repoRoot, query, crashFile);
     }
     if (cmd == "trace") {
         if (argc < 3) { std::cerr << "usage: chronos trace <traceId>\n"; return 2; }
@@ -417,6 +787,45 @@ int main(int argc, char** argv) {
             }
         }
         return cmdCheckStaging(targetRepo, strict);
+    }
+
+    
+    if (cmd == "map") {
+        if (argc < 3) { std::cerr << "usage: chronos map <target> [--depth N] [--exclude-external] [--flow upstream|downstream]\n"; return 2; }
+        std::string target = argv[2];
+        int depth = 1;
+        bool excludeExternal = false;
+        std::string flow = "";
+        std::string format = "";
+        for (int i = 3; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--depth" && i + 1 < argc) depth = std::stoi(argv[++i]);
+            else if (arg == "--exclude-external") excludeExternal = true;
+            else if (arg == "--flow" && i + 1 < argc) flow = argv[++i];
+            else if (arg == "--format" && i + 1 < argc) format = argv[++i];
+        }
+        return cmdMap(repoRoot, target, depth, excludeExternal, flow, format);
+    }
+    if (cmd == "diagnose") {
+        if (argc < 4 || std::string(argv[2]) != "--trace") { std::cerr << "usage: chronos diagnose --trace <file> [--top N]\n"; return 2; }
+        std::string file = argv[3];
+        int top = 10;
+        for (int i = 4; i < argc; ++i) {
+            if (std::string(argv[i]) == "--top" && i + 1 < argc) top = std::stoi(argv[++i]);
+        }
+        return cmdDiagnose(repoRoot, file, top);
+    }
+
+    if (cmd == "explain") {
+        if (argc < 3) { std::cerr << "usage: chronos explain <symbol> [--query \"<question>\"]\n"; return 2; }
+        std::string symbol = argv[2];
+        std::string query = "";
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--query" && i + 1 < argc) {
+                query = argv[++i];
+            }
+        }
+        return cmdExplain(repoRoot, symbol, query);
     }
 
     std::cerr << "unknown command: " << cmd << "\n";

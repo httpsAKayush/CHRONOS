@@ -131,4 +131,80 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
     return result;
 }
 
+BuildResult ContextBuilder::buildExplain(std::string targetSymbol, const std::string& userQuery) {
+    BuildResult result;
+
+    if (targetSymbol.find("sym:") != 0) {
+        targetSymbol = "sym:" + targetSymbol;
+    }
+
+    std::string rootId;
+    try {
+        rootId = codex_.resolveAlias(targetSymbol);
+    } catch (const std::exception& e) {
+        result.ok = false;
+        result.reason = std::string("Lookup failed: ") + e.what();
+        return result;
+    }
+
+    auto startNode = codex_.getNode(rootId);
+    if (!startNode) {
+        result.ok = false;
+        result.reason = "Could not find node for target symbol in Codex.";
+        return result;
+    }
+
+    std::vector<Edge> edges = codex_.getEdges(rootId, false);
+    std::unordered_set<std::string> depIds;
+    for (const auto& e : edges) {
+        try {
+            std::string resolved = codex_.resolveAlias(e.target_id);
+            depIds.insert(resolved);
+        } catch (...) {
+            continue;
+        }
+    }
+
+    ChronosRequest req;
+    req.traceId = makeTraceId();
+    req.requireCitations = true;
+
+    if (userQuery.empty()) {
+        req.userQuery = "Explain the architectural logic and data flow of this function and its direct dependencies.";
+    } else {
+        req.userQuery = userQuery;
+    }
+
+    ContextNode cnTarget;
+    cnTarget.nodeId = startNode->id;
+    cnTarget.filePath = startNode->file_path;
+    cnTarget.codeSnippet = readLiveSnippet(*startNode);
+    cnTarget.uncertain = startNode->parse_confidence < 0.5f;
+    req.context.push_back(std::move(cnTarget));
+
+    TraceResult trace;
+    trace.nodes.push_back(*startNode);
+
+    for (const auto& did : depIds) {
+        if (did == startNode->id) continue;
+        auto dNode = codex_.getNode(did);
+        if (dNode && dNode->is_active) {
+            ContextNode cn;
+            cn.nodeId = dNode->id;
+            cn.filePath = dNode->file_path;
+            cn.codeSnippet = readLiveSnippet(*dNode);
+            cn.uncertain = dNode->parse_confidence < 0.5f;
+            req.context.push_back(std::move(cn));
+            trace.nodes.push_back(*dNode);
+        }
+    }
+
+    trace.edges = edges;
+    codex_.recordTrace(req.traceId, trace);
+    result.rawTrace = trace;
+    result.ok = true;
+    result.request = std::move(req);
+    return result;
+}
+
 } // namespace chronos

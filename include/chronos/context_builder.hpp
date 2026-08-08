@@ -31,6 +31,9 @@ public:
                        int contextNodeBudget = 10, float seedConfidenceFloor = 0.05f,
                        int64_t queryTimestamp = 0);
 
+    // Hyper-Focused payload generation for `chronos explain` mode
+    BuildResult buildExplain(std::string targetSymbol, const std::string& userQuery = "");
+
 private:
     Codex& codex_;
     VectorIndex& vectors_;

@@ -142,6 +142,92 @@ std::string extractContent(const std::string& openaiJson) {
     return out;
 }
 
+void openAiChatStreaming(const std::string& systemPrompt, const std::string& userQuery, std::function<void(const std::string&)> onChunk) {
+    auto escape = [](const std::string& str) {
+        std::string out;
+        for (char c : str) {
+            if (c == '"' || c == '\\') { out += '\\'; out += c; }
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+    std::string escapedSys = escape(systemPrompt);
+    std::string escapedUser = escape(userQuery);
+
+    const char* orKey = std::getenv("OPENROUTER_API_KEY");
+    const char* oaKey = std::getenv("OPENAI_API_KEY");
+    const char* kmKey = std::getenv("KIMI_API_KEY");
+    
+    std::string apiKey;
+    std::string apiUrl;
+    std::string modelName = "gpt-4o";
+    
+    if (kmKey && kmKey[0]) {
+        apiKey = kmKey;
+        apiUrl = "https://api.tokenrouter.com/v1/chat/completions";
+        modelName = "moonshotai/kimi-k3-free";
+    } else if (orKey && orKey[0]) {
+        apiKey = orKey;
+        apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+        modelName = "meta-llama/llama-3.1-8b-instruct:free";
+    } else if (oaKey && oaKey[0]) {
+        apiKey = oaKey;
+        apiUrl = "https://api.openai.com/v1/chat/completions";
+    }
+
+    if (apiKey.empty()) {
+        std::cerr << "chronos-daemon: No API key environment variable set. Falling back to Oracle-Only.\n";
+        return;
+    }
+
+    std::string body = "{\"model\":\"" + modelName + "\",\"max_tokens\":4096,\"stream\":true,\"messages\":["
+        "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
+        "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
+
+    std::string tmpFile = "/tmp/chronos_daemon_req.json";
+    {
+        std::ofstream out(tmpFile);
+        out << body;
+    }
+
+    std::string cmd = "curl -N -s " + apiUrl + " "
+                      "-H \"Content-Type: application/json\" "
+                      "-H \"Authorization: Bearer " + apiKey + "\" "
+                      "-d @" + tmpFile;
+
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        return;
+    }
+
+    char buffer[4096];
+    std::string lineBuffer;
+    while (!feof(pipe)) {
+        if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            lineBuffer += buffer;
+            size_t newlinePos;
+            while ((newlinePos = lineBuffer.find('\n')) != std::string::npos) {
+                std::string line = lineBuffer.substr(0, newlinePos);
+                lineBuffer = lineBuffer.substr(newlinePos + 1);
+                
+                if (line.find("data: ") == 0) {
+                    std::string data = line.substr(6);
+                    if (data == "[DONE]") continue;
+                    
+                    std::string chunkContent = extractContent(data);
+                    if (!chunkContent.empty()) {
+                        onChunk(chunkContent);
+                    }
+                }
+            }
+        }
+    }
+    pclose(pipe);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -202,24 +288,27 @@ int main(int argc, char** argv) {
             systemPrompt += cn.codeSnippet + "\n\n";
         }
 
-        std::string rawResp = openAiChatBlocking(systemPrompt, req.userQuery);
-        std::string content = extractContent(rawResp);
-
-        ChronosResponseChunk chunk;
-        chunk.traceId = req.traceId;
-        if (content.empty()) {
-            // Daemon unreachable / model errored -> Spec unhappy path:
-            // "TUI falls back to Oracle-Only Mode". We signal this by
-            // sending an empty final chunk; the CLI detects empty content
-            // and switches to Oracle rendering itself.
-            chunk.textDelta = "";
-            chunk.done = true;
+        bool gotAnyText = false;
+        openAiChatStreaming(systemPrompt, req.userQuery, [&](const std::string& chunkContent) {
+            gotAnyText = true;
+            ChronosResponseChunk chunk;
+            chunk.traceId = req.traceId;
+            chunk.textDelta = chunkContent;
+            chunk.done = false;
             send(chunk);
-            return;
+        });
+
+        ChronosResponseChunk finalChunk;
+        finalChunk.traceId = req.traceId;
+        finalChunk.textDelta = "";
+        finalChunk.done = true;
+        
+        if (!gotAnyText) {
+            // Daemon unreachable / model errored
+            // TUI falls back to Oracle-Only Mode
         }
-        chunk.textDelta = content;
-        chunk.done = true;
-        send(chunk);
+        
+        send(finalChunk);
     });
 
     if (!ok) {
