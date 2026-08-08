@@ -90,7 +90,7 @@ int cmdSync(const std::string& repoRoot, bool historyMode) {
         if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
         if (entry.path().string().find("/.git/") != std::string::npos) continue;
         auto ext = entry.path().extension().string();
-        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".rs" || ext == ".go") {
+        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".css" || ext == ".rs" || ext == ".go") {
             ++count;
         }
     }
@@ -175,7 +175,7 @@ int cmdSync(const std::string& repoRoot, bool historyMode) {
         if (entry.path().string().find("/.chronos/") != std::string::npos) continue;
         if (entry.path().string().find("/.git/") != std::string::npos) continue;
         auto ext = entry.path().extension().string();
-        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".rs" || ext == ".go") {
+        if (ext == ".cpp" || ext == ".h" || ext == ".hpp" || ext == ".cc" || ext == ".py" || ext == ".md" || ext == ".ts" || ext == ".js" || ext == ".css" || ext == ".rs" || ext == ".go") {
             std::string rel = fs::relative(entry.path(), repoRoot).string();
             indexer.indexFile(rel, "sync");
         }

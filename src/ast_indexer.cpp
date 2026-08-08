@@ -7,7 +7,7 @@
 #include <chrono>
 #include <unordered_set>
 
-#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
+#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON || CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT || CHRONOS_HAVE_TREE_SITTER_CSS
 extern "C" {
   #include <tree_sitter/api.h>
 #if CHRONOS_HAVE_TREE_SITTER_CPP
@@ -15,6 +15,12 @@ extern "C" {
 #endif
 #if CHRONOS_HAVE_TREE_SITTER_PYTHON
   const TSLanguage* tree_sitter_python(void);
+#endif
+#if CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT
+  const TSLanguage* tree_sitter_javascript(void);
+#endif
+#if CHRONOS_HAVE_TREE_SITTER_CSS
+  const TSLanguage* tree_sitter_css(void);
 #endif
 }
 #endif
@@ -291,6 +297,66 @@ void walk(TSNode rootNode, const std::string& source, std::vector<FunctionSpan>&
         }
     }
 }
+
+static const char* JS_QUERY_STRING = 
+"; 1. Catch standard functions\n"
+"(function_declaration name: (identifier) @node.name) @node.definition\n"
+"; 2. Catch arrow functions assigned to variables\n"
+"(lexical_declaration (variable_declarator name: (identifier) @node.name value: (arrow_function))) @node.definition\n"
+"; 3. Catch classes\n"
+"(class_declaration name: (identifier) @node.name) @node.definition\n"
+"; 4. Catch ES6 Imports\n"
+"(import_statement) @node.dependency\n";
+
+static const char* CSS_QUERY_STRING =
+"; Catch CSS rules\n"
+"(rule_set (selectors (class_selector) @node.name)) @node.definition\n"
+"(rule_set (selectors (id_selector) @node.name)) @node.definition\n";
+
+void walk_query(TSNode root, const std::string& source, const TSLanguage* lang, const std::string& q_str, std::vector<FunctionSpan>& spans) {
+    uint32_t err_offset;
+    TSQueryError err_type;
+    TSQuery* query = ts_query_new(lang, q_str.c_str(), q_str.length(), &err_offset, &err_type);
+    if (!query) {
+        printf("TS Query error at offset %u, type %d\n", err_offset, err_type);
+        return;
+    }
+
+    TSQueryCursor* cursor = ts_query_cursor_new();
+    ts_query_cursor_exec(cursor, query, root);
+
+    TSQueryMatch match;
+    while (ts_query_cursor_next_match(cursor, &match)) {
+        FunctionSpan span;
+        span.byteStart = 0;
+        span.byteEnd = 0;
+        bool has_def = false;
+
+        for (uint16_t i = 0; i < match.capture_count; ++i) {
+            TSQueryCapture capture = match.captures[i];
+            uint32_t name_len;
+            const char* name = ts_query_capture_name_for_id(query, capture.index, &name_len);
+            std::string capture_name(name, name_len);
+
+            if (capture_name == "node.definition" || capture_name == "node.dependency") {
+                span.byteStart = ts_node_start_byte(capture.node);
+                span.byteEnd = ts_node_end_byte(capture.node);
+                extractCalls(capture.node, source, span.outgoingCalls);
+                collectTokens(capture.node, span.tokens);
+                has_def = true;
+            } else if (capture_name == "node.name") {
+                span.name = extractText(capture.node, source);
+            }
+        }
+        
+        if (has_def) {
+            spans.push_back(std::move(span));
+        }
+    }
+
+    ts_query_cursor_delete(cursor);
+    ts_query_delete(query);
+}
 }
 #endif
 
@@ -308,20 +374,33 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
     ++stats_.filesProcessed;
     if (source.empty()) { removeFile(relativePath); return processedNodes; }
 
-#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
+#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON || CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT || CHRONOS_HAVE_TREE_SITTER_CSS
     TSParser* parser = nullptr;
+    const TSLanguage* lang = nullptr;
     auto ext = fs::path(relativePath).extension().string();
     if (ext == ".py") {
 #if CHRONOS_HAVE_TREE_SITTER_PYTHON
-        parser = ts_parser_new();
-        ts_parser_set_language(parser, tree_sitter_python());
+        lang = tree_sitter_python();
+#endif
+    } else if (ext == ".js" || ext == ".jsx" || ext == ".mjs") {
+#if CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT
+        lang = tree_sitter_javascript();
+#endif
+    } else if (ext == ".css") {
+#if CHRONOS_HAVE_TREE_SITTER_CSS
+        lang = tree_sitter_css();
 #endif
     } else {
 #if CHRONOS_HAVE_TREE_SITTER_CPP
-        parser = ts_parser_new();
-        ts_parser_set_language(parser, tree_sitter_cpp());
+        lang = tree_sitter_cpp();
 #endif
     }
+
+    if (lang) {
+        parser = ts_parser_new();
+        ts_parser_set_language(parser, lang);
+    }
+
 
     if (parser) {
         TSTree* tree = ts_parser_parse_string(parser, nullptr, source.c_str(),
@@ -348,7 +427,14 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
             
             bool hasSyntaxError = ts_node_has_error(root);
             std::vector<FunctionSpan> spans;
-            walk(root, source, spans);
+            
+            if (ext == ".js" || ext == ".jsx" || ext == ".mjs") {
+                walk_query(root, source, lang, JS_QUERY_STRING, spans);
+            } else if (ext == ".css") {
+                walk_query(root, source, lang, CSS_QUERY_STRING, spans);
+            } else {
+                walk(root, source, spans);
+            }
 
             if (spans.empty()) {
                 // tree-sitter parsed *something* but found no

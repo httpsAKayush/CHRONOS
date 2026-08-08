@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(chronos LANGUAGES CXX)
+project(chronos LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -88,6 +88,18 @@ if(TREE_SITTER_LIB)
     target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_LIB} ${TREE_SITTER_PYTHON_LIB})
   endif()
 endif()
+
+# Add JavaScript Parser
+add_library(tree-sitter-javascript STATIC external/tree-sitter-javascript/src/parser.c external/tree-sitter-javascript/src/scanner.c)
+target_include_directories(tree-sitter-javascript PRIVATE external/tree-sitter-javascript/src)
+target_compile_definitions(chronos_core PUBLIC CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT=1)
+
+# Add CSS Parser
+add_library(tree-sitter-css STATIC external/tree-sitter-css/src/parser.c external/tree-sitter-css/src/scanner.c)
+target_include_directories(tree-sitter-css PRIVATE external/tree-sitter-css/src)
+target_compile_definitions(chronos_core PUBLIC CHRONOS_HAVE_TREE_SITTER_CSS=1)
+
+target_link_libraries(chronos_core PUBLIC tree-sitter-javascript tree-sitter-css)
 
 # --- Indexer entrypoint (invoked by the git hook, fail-open, async worker) ---
 add_executable(chronos-indexer src/main_indexer.cpp)
