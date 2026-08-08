@@ -28,6 +28,7 @@ struct Node {
     uint64_t simhash = 0;
     bool is_active = true;
     float parse_confidence = 1.0f;  // ADDED: Structural Uncertainty (Spec Glossary)
+    std::string ai_summary;
 };
 
 struct Edge {
@@ -35,6 +36,8 @@ struct Edge {
     std::string target_id;
     std::string type;               // "CALLS" | "INHERITS" | "PROBABLE_TARGET"
     float probable_target_weight = 1.0f;
+    int start_line = 0;
+    std::string call_site_text;
 };
 
 struct HistoryEntry {
@@ -63,6 +66,7 @@ public:
 
     // --- Node/Edge mutation (called only from the async indexer worker) ---
     void upsertNode(const Node& n);
+    void updateAiSummary(const std::string& nodeId, const std::string& summary);
     void tombstoneNode(const std::string& nodeId);            // is_active = false
     void upsertEdge(const Edge& e);
     void appendHistory(const HistoryEntry& h);
@@ -73,6 +77,10 @@ public:
     void recordAlias(const std::string& oldId, const std::string& newId,
                       const std::string& commitHash);
     std::string resolveAlias(const std::string& id);           // -> root id
+
+    // --- Imports (Hybrid Scoped Resolution) ---
+    void insertFileImport(const std::string& filePath, const std::string& symbolName, const std::string& sourceModule);
+    void clearFileImports(const std::string& filePath);
 
     struct HistoryRecord {
         std::string nodeId;
@@ -94,6 +102,9 @@ public:
     std::optional<Node> getNode(const std::string& id);
     std::optional<Node> findBySimhash(uint64_t simhash, const std::string& filePath);
     std::optional<Node> findBySimhashGlobal(uint64_t simhash);
+    
+    std::vector<Edge> getEdges(const std::string& nodeId, bool outgoing);
+    std::vector<Node> queryNodesByPathPrefix(const std::string& prefix);
 
     // --- Tracing ---
     void recordTrace(const std::string& traceId, const TraceResult& trace);

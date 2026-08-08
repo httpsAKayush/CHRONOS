@@ -5,6 +5,7 @@
 #include <random>
 #include <filesystem>
 #include <chrono>
+#include <unordered_set>
 
 #if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
 extern "C" {
@@ -78,10 +79,17 @@ namespace {
 // grammar-level type name plus its non-identifier child kinds (keeps
 // control-flow shape, strips identifier/type text) — this is what makes
 // Simhash rename-stable per Spec Glossary "Simhash Normalization".
+struct ExtractedCall {
+    std::string target;
+    int start_line;
+    bool is_noise;
+    std::string call_site_text;
+};
+
 struct FunctionSpan {
     uint32_t byteStart, byteEnd;
     std::string name;
-    std::vector<std::string> outgoingCalls;
+    std::vector<ExtractedCall> outgoingCalls;
     std::vector<StructuralToken> tokens;
 };
 
@@ -95,6 +103,14 @@ std::string extractText(TSNode n, const std::string& source) {
 std::string findFirstIdentifier(TSNode node, const std::string& source) {
     const char* type = ts_node_type(node);
     std::string t(type);
+    
+    if (t == "attribute" || t == "field_expression") {
+        uint32_t count = ts_node_child_count(node);
+        if (count > 0) {
+            return findFirstIdentifier(ts_node_child(node, count - 1), source);
+        }
+    }
+    
     if (t == "identifier" || t == "field_identifier" || t == "name") return extractText(node, source);
     uint32_t count = ts_node_child_count(node);
     for (uint32_t i = 0; i < count; ++i) {
@@ -104,18 +120,105 @@ std::string findFirstIdentifier(TSNode node, const std::string& source) {
     return "";
 }
 
-void extractCalls(TSNode node, const std::string& source, std::vector<std::string>& out) {
+void extractCalls(TSNode node, const std::string& source, std::vector<ExtractedCall>& out) {
+    static const std::unordered_set<std::string> NOISE = {
+        "print", "time", "len", "range", "int", "float", "str", "list", "dict", "set", "tuple", "bool",
+        "type", "isinstance", "issubclass", "getattr", "setattr", "hasattr", "delattr", "open",
+        "round", "sum", "min", "max", "abs", "enumerate", "zip", "map", "filter", "any", "all",
+        "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "super"
+    };
     const char* type = ts_node_type(node);
     std::string t(type);
     if (t == "call_expression" || t == "call") {
         if (ts_node_child_count(node) > 0) {
             std::string target = findFirstIdentifier(ts_node_child(node, 0), source);
-            if (!target.empty()) out.push_back(target);
+            if (!target.empty()) {
+                ExtractedCall ec;
+                ec.target = target;
+                ec.start_line = ts_node_start_point(node).row + 1;
+                ec.is_noise = (NOISE.count(target) > 0);
+                
+                TSNode stmtNode = node;
+                TSNode parent = ts_node_parent(stmtNode);
+                while (!ts_node_is_null(parent)) {
+                    std::string pType(ts_node_type(parent));
+                    if (pType == "expression_statement" || pType == "assignment" || pType == "variable_declaration" || pType == "return_statement" || pType == "declaration") {
+                        stmtNode = parent;
+                        break;
+                    }
+                    if (pType == "function_definition" || pType == "class_definition" || pType == "block") break;
+                    parent = ts_node_parent(parent);
+                }
+                ec.call_site_text = extractText(stmtNode, source);
+                
+                // Trim trailing newlines if any
+                while (!ec.call_site_text.empty() && (ec.call_site_text.back() == '\n' || ec.call_site_text.back() == '\r')) {
+                    ec.call_site_text.pop_back();
+                }
+                
+                out.push_back(ec);
+            }
         }
     }
     uint32_t count = ts_node_child_count(node);
     for (uint32_t i = 0; i < count; ++i) {
         extractCalls(ts_node_child(node, i), source, out);
+    }
+}
+
+void extractImports(TSNode node, const std::string& source, std::vector<std::pair<std::string, std::string>>& imports) {
+    if (ts_node_is_null(node)) return;
+    std::string type = ts_node_type(node);
+    
+    if (type == "import_statement") {
+        for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
+            TSNode child = ts_node_child(node, i);
+            std::string ctype = ts_node_type(child);
+            if (ctype == "dotted_name") {
+                std::string mod = extractText(child, source);
+                if (!mod.empty()) imports.push_back({mod, mod});
+            } else if (ctype == "aliased_import") {
+                std::string alias;
+                std::string mod;
+                for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
+                    TSNode g = ts_node_child(child, j);
+                    std::string gtype = ts_node_type(g);
+                    if (gtype == "dotted_name") mod = extractText(g, source);
+                    else if (gtype == "identifier") alias = extractText(g, source);
+                }
+                if (!alias.empty() && !mod.empty()) imports.push_back({alias, mod});
+            }
+        }
+    } else if (type == "import_from_statement") {
+        std::string moduleName = "";
+        for (uint32_t i = 0; i < ts_node_child_count(node); ++i) {
+            TSNode child = ts_node_child(node, i);
+            std::string ctype = ts_node_type(child);
+            if (ctype == "dotted_name" && moduleName.empty()) {
+                moduleName = extractText(child, source);
+            } else if (ctype == "dotted_name" && !moduleName.empty()) {
+                std::string sym = extractText(child, source);
+                imports.push_back({sym, moduleName});
+            } else if (ctype == "aliased_import") {
+                std::string alias;
+                std::string orig;
+                for (uint32_t j = 0; j < ts_node_child_count(child); ++j) {
+                    TSNode g = ts_node_child(child, j);
+                    std::string gtype = ts_node_type(g);
+                    if (gtype == "dotted_name" || gtype == "identifier") {
+                        if (orig.empty()) orig = extractText(g, source);
+                        else alias = extractText(g, source);
+                    }
+                }
+                if (!alias.empty()) imports.push_back({alias, moduleName});
+                else if (!orig.empty()) imports.push_back({orig, moduleName});
+            }
+        }
+    }
+    
+    uint32_t count = ts_node_child_count(node);
+    for (uint32_t i = 0; i < count; ++i) {
+        extractImports(ts_node_child(node, i), source, imports);
     }
 }
 
@@ -195,6 +298,14 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
         }
         {
             TSNode root = ts_tree_root_node(tree);
+            
+            codex_.clearFileImports(relativePath);
+            std::vector<std::pair<std::string, std::string>> imports;
+            extractImports(root, source, imports);
+            for (const auto& imp : imports) {
+                codex_.insertFileImport(relativePath, imp.first, imp.second);
+            }
+            
             bool hasSyntaxError = ts_node_has_error(root);
             std::vector<FunctionSpan> spans;
             walk(root, source, spans);
@@ -256,9 +367,9 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
                 // exactly once per newly-discovered node (fixed: this used
                 // to run twice back-to-back, double-writing every edge).
                 if (!existing) {
-                    for (const auto& callTarget : span.outgoingCalls) {
-                        if (callTarget.empty()) continue;
-                        std::string targetSym = "sym:" + callTarget;
+                    for (const auto& call : span.outgoingCalls) {
+                        std::string targetSym = "sym:" + call.target;
+                        // Ensure a stub exists
                         if (!codex_.getNode(targetSym)) {
                             Node stub;
                             stub.id = targetSym;
@@ -269,7 +380,8 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
                             stub.parse_confidence = 0.0f;
                             codex_.upsertNode(stub);
                         }
-                        codex_.upsertEdge({nodeId, targetSym, "CALLS", 1.0f});
+                        std::string edgeType = call.is_noise ? "external_symbol" : "CALLS";
+                        codex_.upsertEdge({nodeId, targetSym, edgeType, 1.0f, call.start_line, call.call_site_text});
                     }
                 }
 

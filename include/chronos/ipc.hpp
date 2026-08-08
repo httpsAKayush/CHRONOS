@@ -25,8 +25,10 @@ struct ContextNode {
 // Matches Spec §7 Daemon RPC: POST /v1/chat/completions-shaped payload,
 // simplified to what Chronos actually needs to send.
 struct ChronosRequest {
+    std::string command = "ask";      // e.g. "ask" or "summarize"
     std::string traceId;              // Spec §9 Observability "Traceability ID"
     std::string userQuery;
+    std::string systemPromptOverride; // Allows --explain to change LLM behavior
     std::vector<ContextNode> context;
     bool requireCitations = true;     // FR-8
 };

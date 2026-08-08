@@ -39,28 +39,47 @@ constexpr auto kIdleTimeout = 15min; // FR-5
 // Spec's "strictly local, no network exposure" constraint (the socket
 // itself never leaves loopback).
 std::string openAiChatBlocking(const std::string& systemPrompt, const std::string& userQuery) {
-    std::string escapedSys, escapedUser;
-    for (char c : systemPrompt) {
-        if (c == '"' || c == '\\') escapedSys += '\\';
-        if (c == '\n') escapedSys += "\\n";
-        else escapedSys += c;
-    }
-    for (char c : userQuery) {
-        if (c == '"' || c == '\\') escapedUser += '\\';
-        if (c == '\n') escapedUser += "\\n";
-        else escapedUser += c;
+    auto escape = [](const std::string& str) {
+        std::string out;
+        for (char c : str) {
+            if (c == '"' || c == '\\') { out += '\\'; out += c; }
+            else if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else out += c;
+        }
+        return out;
+    };
+    std::string escapedSys = escape(systemPrompt);
+    std::string escapedUser = escape(userQuery);
+
+    const char* orKey = std::getenv("OPENROUTER_API_KEY");
+    const char* oaKey = std::getenv("OPENAI_API_KEY");
+    const char* kmKey = std::getenv("KIMI_API_KEY");
+    
+    std::string apiKey;
+    std::string apiUrl;
+    std::string modelName = "gpt-4o";
+    
+    if (kmKey && kmKey[0]) {
+        apiKey = kmKey;
+        apiUrl = "https://api.tokenrouter.com/v1/chat/completions";
+        modelName = "moonshotai/kimi-k3-free";
+    } else if (orKey && orKey[0]) {
+        apiKey = orKey;
+        apiUrl = "https://openrouter.ai/api/v1/chat/completions";
+        modelName = "meta-llama/llama-3.1-8b-instruct:free";
+    } else if (oaKey && oaKey[0]) {
+        apiKey = oaKey;
+        apiUrl = "https://api.openai.com/v1/chat/completions";
     }
 
-    const char* sysKey = std::getenv("OPENROUTER_API_KEY");
-    if (!sysKey) sysKey = std::getenv("OPENAI_API_KEY");
-    const char* apiKey = sysKey ? sysKey : "";
-
-    if (!apiKey[0]) {
+    if (apiKey.empty()) {
         std::cerr << "chronos-daemon: No API key environment variable set. Falling back to Oracle-Only.\n";
         return "";
     }
 
-    std::string body = "{\"model\":\"openai/gpt-4o\",\"max_tokens\":1000,\"messages\":["
+    std::string body = "{\"model\":\"" + modelName + "\",\"max_tokens\":4096,\"messages\":["
         "{\"role\":\"system\",\"content\":\"" + escapedSys + "\"},"
         "{\"role\":\"user\",\"content\":\"" + escapedUser + "\"}]}";
 
@@ -70,9 +89,9 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
         out << body;
     }
 
-    std::string cmd = "curl -s https://openrouter.ai/api/v1/chat/completions "
+    std::string cmd = "curl -s " + apiUrl + " "
                       "-H \"Content-Type: application/json\" "
-                      "-H \"Authorization: Bearer " + std::string(apiKey) + "\" "
+                      "-H \"Authorization: Bearer " + apiKey + "\" "
                       "-d @" + tmpFile;
 
     FILE* pipe = popen(cmd.c_str(), "r");
@@ -161,7 +180,23 @@ int main(int argc, char** argv) {
                                            const std::function<void(const ChronosResponseChunk&)>& send) {
         g_lastActivity.store(std::chrono::steady_clock::now());
 
-        std::string systemPrompt = kSystemPromptTemplate;
+        if (req.command == "summarize") {
+            std::string prompt = "You are a code summarization tool. For each provided code block, provide a 3-to-5 word label describing what it does. Format your output strictly as: nodeId|summary, one per line. Do NOT output any json or markdown formatting. Example:\nnode_123|Calculates point cloud RMSE\nnode_456|Loads reference data";
+            for (const auto& cn : req.context) {
+                prompt += "\n--- [" + cn.nodeId + "] ---\n" + cn.codeSnippet + "\n";
+            }
+            std::string rawResp = openAiChatBlocking(prompt, "Summarize the blocks as requested.");
+            std::string content = extractContent(rawResp);
+            
+            ChronosResponseChunk chunk;
+            chunk.traceId = req.traceId;
+            chunk.textDelta = content;
+            chunk.done = true;
+            send(chunk);
+            return;
+        }
+
+        std::string systemPrompt = req.systemPromptOverride.empty() ? kSystemPromptTemplate : req.systemPromptOverride;
         for (const auto& cn : req.context) {
             systemPrompt += "--- File: " + cn.filePath + " [node:" + cn.nodeId + "] ---\n";
             systemPrompt += cn.codeSnippet + "\n\n";

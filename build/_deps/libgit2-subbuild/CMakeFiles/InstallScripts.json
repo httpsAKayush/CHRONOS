@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/zer0/CHRONO/build/_deps/libgit2-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

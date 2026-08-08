@@ -71,6 +71,7 @@ add_library(chronos_core
   src/mmr.cpp
   src/rrf.cpp
   src/git_indexer.cpp
+  src/diagnose.cpp
 )
 
 target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include ${hnswlib_SOURCE_DIR})

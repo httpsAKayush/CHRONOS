@@ -12,7 +12,7 @@ namespace chronos {
 
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 3;
 
 void execOrThrow(sqlite3* db, const std::string& sql) {
     char* errMsg = nullptr;
@@ -55,6 +55,13 @@ void Codex::migrate() {
     }
     if (userVersion >= kSchemaVersion) return;
 
+    if (userVersion > 0 && userVersion < 3) {
+        // v2 -> v3 migrations
+        // We catch errors in case the column already exists (e.g. partial migration)
+        sqlite3_exec(db_, "ALTER TABLE edges ADD COLUMN call_site_text TEXT;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN ai_summary TEXT;", nullptr, nullptr, nullptr);
+    }
+
     execOrThrow(db_, R"SQL(
         BEGIN;
 
@@ -65,7 +72,8 @@ void Codex::migrate() {
             byte_end         INTEGER NOT NULL,
             simhash          INTEGER NOT NULL,
             is_active        INTEGER NOT NULL,
-            parse_confidence REAL NOT NULL
+            parse_confidence REAL NOT NULL,
+            ai_summary       TEXT
         );
 
         CREATE TABLE IF NOT EXISTS history (
@@ -84,6 +92,8 @@ void Codex::migrate() {
             target_id  TEXT NOT NULL REFERENCES nodes(id),
             type       TEXT NOT NULL,
             probable_target_weight REAL NOT NULL DEFAULT 1.0,
+            start_line INTEGER DEFAULT 0,
+            call_site_text TEXT,
             PRIMARY KEY (source_id, target_id, type)
         );
         CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
@@ -105,8 +115,20 @@ void Codex::migrate() {
             created_at     INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS file_imports (
+            file_path TEXT NOT NULL,
+            symbol_name TEXT NOT NULL,
+            source_module TEXT NOT NULL,
+            PRIMARY KEY(file_path, symbol_name)
+        );
+
         COMMIT;
     )SQL");
+    
+    if (userVersion < 2) {
+        execOrThrow(db_, "ALTER TABLE nodes ADD COLUMN ai_summary TEXT;");
+        execOrThrow(db_, "ALTER TABLE edges ADD COLUMN start_line INTEGER DEFAULT 0;");
+    }
 
     execOrThrow(db_, "PRAGMA user_version = " + std::to_string(kSchemaVersion) + ";");
 }
@@ -116,15 +138,16 @@ void Codex::upsertNode(const Node& n) {
         throw std::invalid_argument("byte_end must be strictly greater than byte_start");
     }
     static const char* sql = R"SQL(
-        INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         ON CONFLICT(id) DO UPDATE SET
             file_path = excluded.file_path,
             byte_start = excluded.byte_start,
             byte_end = excluded.byte_end,
             simhash = excluded.simhash,
             is_active = excluded.is_active,
-            parse_confidence = excluded.parse_confidence;
+            parse_confidence = excluded.parse_confidence,
+            ai_summary = excluded.ai_summary;
     )SQL";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -135,6 +158,11 @@ void Codex::upsertNode(const Node& n) {
     sqlite3_bind_int64(stmt, 5, static_cast<int64_t>(n.simhash));
     sqlite3_bind_int(stmt, 6, n.is_active ? 1 : 0);
     sqlite3_bind_double(stmt, 7, n.parse_confidence);
+    if (!n.ai_summary.empty()) {
+        sqlite3_bind_text(stmt, 8, n.ai_summary.c_str(), -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 8);
+    }
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         sqlite3_finalize(stmt);
         throw std::runtime_error("upsertNode failed");
@@ -156,12 +184,23 @@ void Codex::tombstoneNode(const std::string& nodeId) {
     sqlite3_finalize(stmt2);
 }
 
+void Codex::updateAiSummary(const std::string& nodeId, const std::string& summary) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, "UPDATE nodes SET ai_summary = ?1 WHERE id = ?2;", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, summary.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
 void Codex::upsertEdge(const Edge& e) {
     static const char* sql = R"SQL(
-        INSERT INTO edges (source_id, target_id, type, probable_target_weight)
-        VALUES (?1, ?2, ?3, ?4)
+        INSERT INTO edges (source_id, target_id, type, probable_target_weight, start_line, call_site_text)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         ON CONFLICT(source_id, target_id, type) DO UPDATE SET
-            probable_target_weight = excluded.probable_target_weight;
+            probable_target_weight = excluded.probable_target_weight,
+            start_line = excluded.start_line,
+            call_site_text = excluded.call_site_text;
     )SQL";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -169,6 +208,12 @@ void Codex::upsertEdge(const Edge& e) {
     sqlite3_bind_text(stmt, 2, e.target_id.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, e.type.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_double(stmt, 4, e.probable_target_weight);
+    sqlite3_bind_int(stmt, 5, e.start_line);
+    if (!e.call_site_text.empty()) {
+        sqlite3_bind_text(stmt, 6, e.call_site_text.c_str(), -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 6);
+    }
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 }
@@ -218,6 +263,63 @@ void Codex::recordAlias(const std::string& oldId, const std::string& newId,
 }
 
 std::string Codex::resolveAlias(const std::string& id) {
+    if (id.find("sym:") == 0) {
+        std::string symbol = id.substr(4);
+        
+        std::string callingFilePath = "";
+        sqlite3_stmt* fpStmt;
+        sqlite3_prepare_v2(db_, "SELECT file_path FROM nodes WHERE id = ?1;", -1, &fpStmt, nullptr);
+        sqlite3_bind_text(fpStmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(fpStmt) == SQLITE_ROW) {
+            callingFilePath = reinterpret_cast<const char*>(sqlite3_column_text(fpStmt, 0));
+        }
+        sqlite3_finalize(fpStmt);
+        
+        if (!callingFilePath.empty()) {
+            sqlite3_stmt* importStmt;
+            sqlite3_prepare_v2(db_, "SELECT source_module FROM file_imports WHERE file_path = ?1 AND symbol_name = ?2;", -1, &importStmt, nullptr);
+            sqlite3_bind_text(importStmt, 1, callingFilePath.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(importStmt, 2, symbol.c_str(), -1, SQLITE_TRANSIENT);
+            
+            std::string sourceModule;
+            if (sqlite3_step(importStmt) == SQLITE_ROW) {
+                sourceModule = reinterpret_cast<const char*>(sqlite3_column_text(importStmt, 0));
+            }
+            sqlite3_finalize(importStmt);
+            
+            if (!sourceModule.empty()) {
+                std::string modPath = sourceModule;
+                for (char& c : modPath) if (c == '.') c = '/';
+                
+                sqlite3_stmt* stmt;
+                sqlite3_prepare_v2(db_, "SELECT root_id FROM alias WHERE old_id = ?1;", -1, &stmt, nullptr);
+                sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+                
+                std::string bestRoot = "";
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    std::string rootId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                    
+                    sqlite3_stmt* nodeStmt;
+                    sqlite3_prepare_v2(db_, "SELECT file_path FROM nodes WHERE id = ?1;", -1, &nodeStmt, nullptr);
+                    sqlite3_bind_text(nodeStmt, 1, rootId.c_str(), -1, SQLITE_TRANSIENT);
+                    if (sqlite3_step(nodeStmt) == SQLITE_ROW) {
+                        std::string nodePath = reinterpret_cast<const char*>(sqlite3_column_text(nodeStmt, 0));
+                        if (nodePath.find(modPath + ".py") != std::string::npos || nodePath.find(modPath + "/__init__.py") != std::string::npos) {
+                            bestRoot = rootId;
+                        }
+                    }
+                    sqlite3_finalize(nodeStmt);
+                    if (!bestRoot.empty()) break;
+                }
+                sqlite3_finalize(stmt);
+                
+                if (!bestRoot.empty()) {
+                    return bestRoot;
+                }
+            }
+        }
+    }
+
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, "SELECT root_id FROM alias WHERE old_id = ?1;", -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
@@ -227,6 +329,26 @@ std::string Codex::resolveAlias(const std::string& id) {
     }
     sqlite3_finalize(stmt);
     return result;
+}
+
+void Codex::insertFileImport(const std::string& filePath, const std::string& symbolName, const std::string& sourceModule) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_,
+        "INSERT OR REPLACE INTO file_imports (file_path, symbol_name, source_module) VALUES (?1, ?2, ?3);",
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, filePath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, symbolName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, sourceModule.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+void Codex::clearFileImports(const std::string& filePath) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, "DELETE FROM file_imports WHERE file_path = ?1;", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, filePath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
 }
 
 void Codex::recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg) {
@@ -294,7 +416,7 @@ std::vector<Codex::HistoryRecord> Codex::getHistoryForFile(const std::string& fi
 std::optional<Node> Codex::getNode(const std::string& id) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
-        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence "
+        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary "
         "FROM nodes WHERE id = ?1;", -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
     std::optional<Node> out;
@@ -307,6 +429,9 @@ std::optional<Node> Codex::getNode(const std::string& id) {
         n.simhash = static_cast<uint64_t>(sqlite3_column_int64(stmt, 4));
         n.is_active = sqlite3_column_int(stmt, 5) != 0;
         n.parse_confidence = static_cast<float>(sqlite3_column_double(stmt, 6));
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            n.ai_summary = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        }
         out = n;
     }
     sqlite3_finalize(stmt);
@@ -316,7 +441,7 @@ std::optional<Node> Codex::getNode(const std::string& id) {
 std::optional<Node> Codex::findBySimhash(uint64_t simhash, const std::string& filePath) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
-        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence "
+        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary "
         "FROM nodes WHERE simhash = ?1 AND file_path = ?2 AND is_active = 1 LIMIT 1;",
         -1, &stmt, nullptr);
     sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(simhash));
@@ -331,6 +456,9 @@ std::optional<Node> Codex::findBySimhash(uint64_t simhash, const std::string& fi
         n.simhash = static_cast<uint64_t>(sqlite3_column_int64(stmt, 4));
         n.is_active = sqlite3_column_int(stmt, 5) != 0;
         n.parse_confidence = static_cast<float>(sqlite3_column_double(stmt, 6));
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            n.ai_summary = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        }
         out = n;
     }
     sqlite3_finalize(stmt);
@@ -340,7 +468,7 @@ std::optional<Node> Codex::findBySimhash(uint64_t simhash, const std::string& fi
 std::optional<Node> Codex::findBySimhashGlobal(uint64_t simhash) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
-        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence "
+        "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary "
         "FROM nodes WHERE simhash = ?1 AND is_active = 1 LIMIT 1;",
         -1, &stmt, nullptr);
     sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(simhash));
@@ -354,11 +482,68 @@ std::optional<Node> Codex::findBySimhashGlobal(uint64_t simhash) {
         n.simhash = static_cast<uint64_t>(sqlite3_column_int64(stmt, 4));
         n.is_active = sqlite3_column_int(stmt, 5) != 0;
         n.parse_confidence = static_cast<float>(sqlite3_column_double(stmt, 6));
+        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
+            n.ai_summary = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7));
+        }
         out = n;
     }
     sqlite3_finalize(stmt);
     return out;
 }
+
+std::vector<Edge> Codex::getEdges(const std::string& nodeId, bool outgoing) {
+    std::vector<Edge> edges;
+    std::string sql = outgoing
+        ? "SELECT target_id, type, probable_target_weight, start_line, call_site_text FROM edges WHERE source_id = ?1 ORDER BY start_line ASC;"
+        : "SELECT source_id, type, probable_target_weight, start_line, call_site_text FROM edges WHERE target_id = ?1 ORDER BY start_line ASC;";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        Edge e;
+        if (outgoing) {
+            e.source_id = nodeId;
+            e.target_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        } else {
+            e.source_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            e.target_id = nodeId;
+        }
+        e.type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        e.probable_target_weight = sqlite3_column_double(stmt, 2);
+        e.start_line = sqlite3_column_int(stmt, 3);
+        if (sqlite3_column_text(stmt, 4)) {
+            e.call_site_text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        }
+        edges.push_back(e);
+    }
+    sqlite3_finalize(stmt);
+    return edges;
+}
+
+std::vector<Node> Codex::queryNodesByPathPrefix(const std::string& prefix) {
+    std::vector<Node> nodes;
+    sqlite3_stmt* stmt;
+    std::string sql = "SELECT id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence "
+                      "FROM nodes WHERE file_path LIKE ?1 AND is_active = 1;";
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    std::string pattern = prefix + "%";
+    sqlite3_bind_text(stmt, 1, pattern.c_str(), -1, SQLITE_TRANSIENT);
+    
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        Node n;
+        n.id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        n.file_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        n.byte_start = sqlite3_column_int64(stmt, 2);
+        n.byte_end = sqlite3_column_int64(stmt, 3);
+        n.simhash = static_cast<uint64_t>(sqlite3_column_int64(stmt, 4));
+        n.is_active = sqlite3_column_int(stmt, 5) != 0;
+        n.parse_confidence = static_cast<float>(sqlite3_column_double(stmt, 6));
+        nodes.push_back(n);
+    }
+    sqlite3_finalize(stmt);
+    return nodes;
+}
+
 
 TraceResult Codex::localPushPPR(const std::vector<std::string>& seeds, int budget,
                                  double dampingFactor) {

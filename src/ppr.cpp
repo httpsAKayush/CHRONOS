@@ -29,13 +29,24 @@ const PPREngine::CachedNode& PPREngine::getCachedNode(const std::string& nodeId)
     CachedNode cached;
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(db_,
-        "SELECT target_id, probable_target_weight FROM edges WHERE source_id = ?1;",
+        "SELECT target_id, probable_target_weight, type FROM edges WHERE source_id = ?1;",
         -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         std::string target = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
         double weight = sqlite3_column_double(stmt, 1);
+        std::string type = "";
+        if (sqlite3_column_text(stmt, 2)) {
+            type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        }
+        
         target = resolveAlias(db_, target);
+
+        // Step 1: Blacklist "God Nodes" (Graph Traversal Fix)
+        if (type == "external_symbol" || target.rfind("sym:", 0) == 0) {
+            continue; // Do not hop through this node!
+        }
+
         cached.edges.emplace_back(target, weight);
         cached.outWeightSum += weight;
     }

@@ -67,8 +67,10 @@ bool extractBoolField(const std::string& json, const std::string& key, bool defa
 
 std::string encodeRequest(const ChronosRequest& req) {
     std::ostringstream out;
-    out << "{\"traceId\":\"" << jsonEscape(req.traceId) << "\","
+    out << "{\"command\":\"" << jsonEscape(req.command) << "\","
+        << "\"traceId\":\"" << jsonEscape(req.traceId) << "\","
         << "\"userQuery\":\"" << jsonEscape(req.userQuery) << "\","
+        << "\"systemPromptOverride\":\"" << jsonEscape(req.systemPromptOverride) << "\","
         << "\"requireCitations\":" << (req.requireCitations ? "true" : "false") << ","
         << "\"context\":[";
     for (size_t i = 0; i < req.context.size(); ++i) {
@@ -85,8 +87,11 @@ std::string encodeRequest(const ChronosRequest& req) {
 
 ChronosRequest decodeRequest(const std::string& json) {
     ChronosRequest req;
+    req.command = extractStringField(json, "command");
+    if (req.command.empty()) req.command = "ask";
     req.traceId = extractStringField(json, "traceId");
     req.userQuery = extractStringField(json, "userQuery");
+    req.systemPromptOverride = extractStringField(json, "systemPromptOverride");
     req.requireCitations = extractBoolField(json, "requireCitations", true);
     
     size_t pos = json.find("\"context\":[");
