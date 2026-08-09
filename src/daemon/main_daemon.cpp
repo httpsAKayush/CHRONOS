@@ -11,6 +11,7 @@
 // relay + policy layer between the Codex-derived context and that process.
 
 #include "chronos/infrastructure/llm_config.hpp"
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
 #include <chrono>
@@ -106,30 +107,50 @@ std::string openAiChatBlocking(const std::string& systemPrompt, const std::strin
 }
 
 std::string extractContent(const std::string& openaiJson) {
-    // Basic JSON extraction for the message content in OpenAI's response format
-    size_t choicesPos = openaiJson.find("\"choices\"");
-    if (choicesPos == std::string::npos) return "";
-    
-    size_t contentPos = openaiJson.find("\"content\":", choicesPos);
-    if (contentPos == std::string::npos) return "";
-    
-    // Find the first quote after "content":
-    size_t startPos = openaiJson.find("\"", contentPos + 10);
-    if (startPos == std::string::npos) return "";
-    startPos++; // skip the quote
-    
-    std::string out;
-    for (size_t i = startPos; i < openaiJson.size(); ++i) {
-        if (openaiJson[i] == '\\' && i + 1 < openaiJson.size()) {
-            if (openaiJson[i+1] == 'n') { out += '\n'; i++; continue; }
-            if (openaiJson[i+1] == '"') { out += '"'; i++; continue; }
-            out += openaiJson[i + 1];
-            i++;
-            continue;
+    // Proper JSON extraction of the assistant message content:
+    //   streamed:     choices[0].delta.content
+    //   non-streamed: choices[0].message.content
+    // Reasoning fields (reasoning_content) and null content are ignored —
+    // only the final answer text is relayed.
+    try {
+        auto j = nlohmann::json::parse(openaiJson);
+        if (!j.is_object()) return "";
+        auto it = j.find("choices");
+        if (it == j.end() || !it->is_array() || it->empty()) return "";
+        const auto& first = (*it)[0];
+        if (!first.is_object()) return "";
+        for (const char* key : {"message", "delta"}) {
+            auto m = first.find(key);
+            if (m == first.end() || !m->is_object()) continue;
+            auto c = m->find("content");
+            if (c != m->end() && c->is_string()) return c->get<std::string>();
         }
-        if (openaiJson[i] == '"') break;
-        out += openaiJson[i];
+    } catch (...) {}
+    return "";
+}
+
+// Best-effort extraction of an error message from a non-SSE response body
+// (e.g. OpenAI/DeepSeek `{"error":{"message":"..."}}`, or a proxy 4xx/5xx
+// body). Returns a truncated raw body when no "message" field is present.
+// SSE payloads (which contain "data: " framing, e.g. keepalive events) are
+// NOT error bodies and yield "" — they mean the upstream started streaming
+// but never delivered content, which is reported differently.
+// Used so an LLM failure surfaces the real reason to the CLI instead of
+// being silently swallowed as "produced no response".
+std::string extractErrorMessage(const std::string& body) {
+    if (body.empty()) return "";
+    if (body.find("data: ") != std::string::npos) return "";
+    size_t msgPos = body.find("\"message\"");
+    if (msgPos != std::string::npos) {
+        size_t colon = body.find(':', msgPos);
+        size_t start = colon == std::string::npos ? std::string::npos : body.find('"', colon + 1);
+        if (start != std::string::npos) {
+            size_t end = body.find('"', start + 1);
+            if (end != std::string::npos) return body.substr(start + 1, end - start - 1);
+        }
     }
+    std::string out = body;
+    if (out.size() > 300) out = out.substr(0, 300) + "...";
     return out;
 }
 
@@ -173,8 +194,11 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
 
     // -N: disable buffering for SSE streaming
     // --connect-timeout: fail fast if Ollama isn't running
-    // --max-time: hard 120s ceiling so a stalled model cannot hang the daemon
-    std::string cmd = "curl -N -s --connect-timeout 5 --max-time 120 " + config.apiUrl + " "
+    // --max-time: hard ceiling so a stalled model cannot hang the daemon.
+    // 300s (not 120) because reasoning models over large contexts can take
+    // a while before their first token, with the proxy streaming keepalive
+    // events meanwhile.
+    std::string cmd = "curl -N -s --connect-timeout 5 --max-time 300 " + config.apiUrl + " "
                       "-H \"Content-Type: application/json\" "
                       "-H \"Authorization: Bearer " + config.apiKey + "\" "
                       "-d @" + tmpFile;
@@ -186,9 +210,13 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
 
     char buffer[4096];
     std::string lineBuffer;
+    std::string rawAll;
     bool streamDone = false;
+    bool sawChunk = false;
+    bool sawSseLine = false;
     while (!feof(pipe) && !streamDone) {
         if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            rawAll += buffer;
             lineBuffer += buffer;
             size_t newlinePos;
             while ((newlinePos = lineBuffer.find('\n')) != std::string::npos) {
@@ -199,6 +227,7 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
                 if (!line.empty() && line.back() == '\r') line.pop_back();
 
                 if (line.find("data: ") == 0) {
+                    sawSseLine = true;
                     std::string data = line.substr(6);
 
                     // OpenAI SSE terminal sentinel — break the read loop immediately
@@ -212,7 +241,7 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
                         data.find("\"done\": true") != std::string::npos) {
                         // Still try to extract final content before breaking
                         std::string chunkContent = extractContent(data);
-                        if (!chunkContent.empty()) onChunk(chunkContent);
+                        if (!chunkContent.empty()) { onChunk(chunkContent); sawChunk = true; }
                         streamDone = true;
                         break;
                     }
@@ -220,12 +249,28 @@ void openAiChatStreaming(const std::string& systemPrompt, const std::string& use
                     std::string chunkContent = extractContent(data);
                     if (!chunkContent.empty()) {
                         onChunk(chunkContent);
+                        sawChunk = true;
                     }
                 }
             }
         }
     }
     pclose(pipe);
+
+    // The upstream returned no usable SSE content at all — most likely a
+    // non-streaming error body (bad key, insufficient balance, 404...) or a
+    // stream that was closed after only keepalive events (provider-side
+    // stall/error). Relay the real reason so the CLI can report it instead
+    // of a generic "no response" fallback.
+    if (!sawChunk) {
+        std::string errMsg = extractErrorMessage(rawAll);
+        if (!errMsg.empty()) {
+            onChunk("[API Error] " + errMsg);
+        } else if (sawSseLine) {
+            onChunk("[API Error] LLM stream closed before producing content "
+                    "(provider-side error, timeout, or empty response). Retry the query.");
+        }
+    }
 }
 
 } // namespace

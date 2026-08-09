@@ -50,7 +50,7 @@ std::string readFile(const std::string& path) {
 }
 
 bool AstIndexer::hasTreeSitter() {
-#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
+#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON || CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT || CHRONOS_HAVE_TREE_SITTER_CSS
     return true;
 #else
     return false;
@@ -78,7 +78,7 @@ void AstIndexer::removeFile(const std::string& relativePath) {
     }
 }
 
-#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON
+#if CHRONOS_HAVE_TREE_SITTER_CPP || CHRONOS_HAVE_TREE_SITTER_PYTHON || CHRONOS_HAVE_TREE_SITTER_JAVASCRIPT || CHRONOS_HAVE_TREE_SITTER_CSS
 namespace {
 // Walks the tree, collecting (byte_start, byte_end, structural tokens) for
 // every function_definition node. Structural tokens = the node's own

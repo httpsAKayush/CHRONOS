@@ -79,13 +79,16 @@ target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} $
 target_link_libraries(chronos_core PUBLIC ${SQLITE3_LIBRARIES} Threads::Threads libgit2package hnswlib nlohmann_json::nlohmann_json httplib::httplib)
 
 if(TREE_SITTER_LIB)
+  # The tree-sitter core runtime is needed by every grammar (including the
+  # always-built JavaScript/CSS parsers below), so link it whenever found.
+  target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_LIB})
   if(TREE_SITTER_CPP_LIB)
     target_compile_definitions(chronos_core PUBLIC CHRONOS_HAVE_TREE_SITTER_CPP=1)
-    target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_LIB} ${TREE_SITTER_CPP_LIB})
+    target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_CPP_LIB})
   endif()
   if(TREE_SITTER_PYTHON_LIB)
     target_compile_definitions(chronos_core PUBLIC CHRONOS_HAVE_TREE_SITTER_PYTHON=1)
-    target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_LIB} ${TREE_SITTER_PYTHON_LIB})
+    target_link_libraries(chronos_core PUBLIC ${TREE_SITTER_PYTHON_LIB})
   endif()
 endif()
 
