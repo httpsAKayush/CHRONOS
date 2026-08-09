@@ -1,0 +1,19 @@
+[ CHRONOS SYSTEM STATUS ]
+
+--- Structural Graph (codex.db) ---
+Database Size : 0.0664062 MB
+Graph Nodes   : 8
+Graph Edges   : 5
+
+--- Semantic Index (vectors.bin) ---
+Vector Size   : 0.0240784 MB
+Embeddings    : 4
+
+--- Temporal Index ---
+History Depth : 2 commits indexed
+Keyframes     : 0 structural mutations mapped
+
+--- System Health ---
+Daemon State  : RUNNING (PID 307699)
+Synced Commit : 3eccccd1
+Active LLM    : llama3.1:8b

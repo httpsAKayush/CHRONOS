@@ -1,5 +1,5 @@
 #include "test_framework.hpp"
-#include "chronos/simhash.hpp"
+#include "chronos/domain/simhash.hpp"
 
 using namespace chronos;
 

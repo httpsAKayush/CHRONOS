@@ -1,5 +1,5 @@
 #include "test_framework.hpp"
-#include "chronos/ast_mutation_scorer.hpp"
+#include "chronos/domain/ast_mutation_scorer.hpp"
 
 using namespace chronos;
 

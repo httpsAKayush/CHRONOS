@@ -1,5 +1,5 @@
 #include "test_framework.hpp"
-#include "chronos/codex.hpp"
+#include "chronos/infrastructure/codex.hpp"
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>

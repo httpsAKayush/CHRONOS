@@ -1,6 +1,6 @@
 #include "test_framework.hpp"
-#include "chronos/codex.hpp"
-#include "chronos/oracle.hpp"
+#include "chronos/infrastructure/codex.hpp"
+#include "chronos/use_cases/oracle.hpp"
 #include <filesystem>
 
 using namespace chronos;

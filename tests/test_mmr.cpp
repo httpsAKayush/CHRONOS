@@ -1,5 +1,5 @@
 #include "test_framework.hpp"
-#include "chronos/mmr.hpp"
+#include "chronos/domain/mmr.hpp"
 
 using namespace chronos;
 

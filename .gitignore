@@ -1,17 +1,20 @@
 
 # Added by `chronos init` -- contains proprietary source structure
 .chronos/
+
 # Ignore build directories and compiled output
 build/
 
-.chronos/
 *.o
 *.so
 *.a
 *.dylib
 *.exe
+
 # Ignore API keys and sensitive information
 .env
 
+# Development artifacts
+.dev_trash/
+
 .agents/
-tests/

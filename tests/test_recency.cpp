@@ -1,7 +1,7 @@
 #include "test_framework.hpp"
-#include "chronos/vector_index.hpp"
-#include "chronos/context_builder.hpp"
-#include "chronos/codex.hpp"
+#include "chronos/infrastructure/vector_index.hpp"
+#include "chronos/use_cases/context_builder.hpp"
+#include "chronos/infrastructure/codex.hpp"
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
@@ -174,6 +174,8 @@ void test_context_builder_query_timestamp() {
         
         // Passing explicit queryTimestamp = 2000000 -> node-2 has zero deltaT while node-1 has decay
         BuildResult res = builder.build("sample query code", 40, 10, 0.01f, 2000000);
+        std::cout << "  [debug] res.ok=" << res.ok << " context.size=" << res.request.context.size() << "\n";
+        for (auto& cn : res.request.context) std::cout << "  [debug] ctx: " << cn.nodeId << "\n";
         CHRONOS_CHECK(res.ok);
         CHRONOS_CHECK(!res.request.context.empty());
         if (!res.request.context.empty()) {
@@ -236,9 +238,9 @@ void test_recency_edge_cases() {
 }
 
 void run_recency_tests() {
-    test_recency_decay_ordering();
-    test_recency_env_alpha_override();
-    test_recency_env_lambda_override();
-    test_context_builder_query_timestamp();
-    test_recency_edge_cases();
+    std::cout << "  test_recency_decay_ordering\n"; std::flush(std::cout); test_recency_decay_ordering();
+    std::cout << "  test_recency_env_alpha_override\n"; std::flush(std::cout); test_recency_env_alpha_override();
+    std::cout << "  test_recency_env_lambda_override\n"; std::flush(std::cout); test_recency_env_lambda_override();
+    std::cout << "  test_context_builder_query_timestamp\n"; std::flush(std::cout); test_context_builder_query_timestamp();
+    std::cout << "  test_recency_edge_cases\n"; std::flush(std::cout); test_recency_edge_cases();
 }

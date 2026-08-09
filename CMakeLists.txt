@@ -59,20 +59,20 @@ find_library(TREE_SITTER_PYTHON_LIB tree-sitter-python)
 find_package(Threads REQUIRED)
 
 add_library(chronos_core
-  src/codex.cpp
-  src/simhash.cpp
-  src/ppr.cpp
-  src/vector_index.cpp
-  src/ast_indexer.cpp
-  src/ast_mutation_scorer.cpp
-  src/ipc.cpp
-  src/context_builder.cpp
-  src/oracle.cpp
-  src/mmr.cpp
-  src/rrf.cpp
-  src/git_indexer.cpp
-  src/diagnose.cpp
-  src/llm_config.cpp
+  src/infrastructure/storage/codex.cpp
+  src/domain/simhash.cpp
+  src/domain/ppr.cpp
+  src/infrastructure/storage/vector_index.cpp
+  src/domain/ast_indexer.cpp
+  src/domain/ast_mutation_scorer.cpp
+  src/daemon/ipc.cpp
+  src/use_cases/context_builder.cpp
+  src/use_cases/oracle.cpp
+  src/domain/mmr.cpp
+  src/domain/rrf.cpp
+  src/infrastructure/vcs/git_indexer.cpp
+  src/use_cases/diagnose.cpp
+  src/infrastructure/llm/llm_config.cpp
 )
 
 target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include ${hnswlib_SOURCE_DIR})
@@ -102,15 +102,15 @@ target_compile_definitions(chronos_core PUBLIC CHRONOS_HAVE_TREE_SITTER_CSS=1)
 target_link_libraries(chronos_core PUBLIC tree-sitter-javascript tree-sitter-css)
 
 # --- Indexer entrypoint (invoked by the git hook, fail-open, async worker) ---
-add_executable(chronos-indexer src/main_indexer.cpp)
+add_executable(chronos-indexer src/daemon/main_indexer.cpp)
 target_link_libraries(chronos-indexer PRIVATE chronos_core)
 
 # --- Daemon: owns the AF_UNIX socket + lazy LLM execution tier ---
-add_executable(chronos-daemon src/main_daemon.cpp)
+add_executable(chronos-daemon src/daemon/main_daemon.cpp)
 target_link_libraries(chronos-daemon PRIVATE chronos_core)
 
 # --- CLI/TUI querier ---
-add_executable(chronos src/main_cli.cpp)
+add_executable(chronos src/cli/main_cli.cpp)
 target_link_libraries(chronos PRIVATE chronos_core)
 
 enable_testing()

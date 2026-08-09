@@ -1,7 +1,7 @@
 #include "test_framework.hpp"
-#include "chronos/vector_index.hpp"
-#include "chronos/codex.hpp"
-#include "chronos/ast_indexer.hpp"
+#include "chronos/infrastructure/vector_index.hpp"
+#include "chronos/infrastructure/codex.hpp"
+#include "chronos/domain/ast_indexer.hpp"
 #include <filesystem>
 #include <fstream>
 #include <vector>
