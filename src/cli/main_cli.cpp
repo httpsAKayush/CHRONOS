@@ -59,13 +59,31 @@ int cmdInit(const std::string& repoRoot) {
     fs::path hooksDir = fs::path(repoRoot) / ".git" / "hooks";
     if (fs::exists(hooksDir)) {
         fs::path hookDest = hooksDir / "pre-commit";
-        fs::path hookSrc = fs::path(repoRoot) / "scripts" / "pre-commit";
-        if (fs::exists(hookSrc)) {
+
+        // Resolve the directory the running chronos binary lives in so we
+        // can find the bundled hook regardless of the CWD or repo layout.
+        char selfBuf[PATH_MAX];
+        ssize_t selfLen = readlink("/proc/self/exe", selfBuf, sizeof(selfBuf) - 1);
+        std::string exeDir = (selfLen != -1) ? fs::path(std::string(selfBuf, selfLen)).parent_path().string() : "";
+
+        // Search order: next to binary (installed location), then repo root.
+        fs::path hookSrc;
+        if (!exeDir.empty()) {
+            fs::path byExe = fs::path(exeDir) / "scripts" / "pre-commit";
+            if (fs::exists(byExe)) hookSrc = byExe;
+        }
+        if (hookSrc.empty()) {
+            fs::path byRepo = fs::path(repoRoot) / "scripts" / "pre-commit";
+            if (fs::exists(byRepo)) hookSrc = byRepo;
+        }
+        if (!hookSrc.empty()) {
             fs::copy_file(hookSrc, hookDest, fs::copy_options::overwrite_existing);
             fs::permissions(hookDest, fs::perms::owner_all | fs::perms::group_read | fs::perms::others_read);
         } else {
-            std::cerr << "warning: scripts/pre-commit not found next to chronos binary; "
-                         "hook not installed automatically. See SETUP.md.\n";
+            std::cerr << "warning: pre-commit hook not found next to chronos binary ("
+                      << exeDir << ") or in repo scripts/; "
+                         "hook not installed automatically. Run `chronos init` from the "
+                         "CHRONO source tree or reinstall via `sudo make install`.\n";
         }
     }
 

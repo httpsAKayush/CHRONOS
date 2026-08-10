@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Origin-relative install RPATH so installed binaries find the shared
+# libraries next to them (bin/<exe> -> ../lib). MUST be set before any
+# add_library/add_executable: CMake copies this into each target's
+# INSTALL_RPATH property at target creation time.
+set(CMAKE_INSTALL_RPATH "\$ORIGIN/../lib")
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -120,4 +126,9 @@ enable_testing()
 add_subdirectory(tests)
 
 # --- Installation ---
-install(TARGETS chronos chronos-daemon chronos-indexer DESTINATION /usr/local/bin)
+# Relative DESTINATIONs resolve against CMAKE_INSTALL_PREFIX (default
+# /usr/local) and also honor `cmake --install <dir> --prefix <p>` staging.
+install(TARGETS chronos chronos-daemon chronos-indexer DESTINATION bin)
+install(TARGETS chronos_core LIBRARY DESTINATION lib)
+install(FILES ${libgit2_BINARY_DIR}/libgit2.so.1.8 DESTINATION lib)
+install(PROGRAMS scripts/pre-commit DESTINATION bin/scripts)
