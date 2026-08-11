@@ -176,9 +176,13 @@ int CmdCommit::execute(int argc, char** argv) {
         "Generate a Conventional Commit message for this staged diff:\n\n" + diff,
         1024);
 
-    if (message.empty()) {
-        std::cerr << "\n[!] LLM produced no response. Check `chronos config list` "
-                     "and your provider keys.\n";
+    bool llmFailed = message.empty() ||
+                     message.rfind("[LLM Unavailable]", 0) == 0 ||
+                     message.rfind("[API Error]", 0) == 0 ||
+                     message.find("\"error\":") != std::string::npos;
+    if (llmFailed) {
+        std::cerr << "\n[!] " << llmUnavailableMessage(static_cast<const Config&>(*ctx_.config)) << "\n";
+        std::cerr << "    Verify with `chronos status` and `chronos config list`, then re-run `chronos commit`.\n";
         return 1;
     }
     message = sanitizeMessage(message);

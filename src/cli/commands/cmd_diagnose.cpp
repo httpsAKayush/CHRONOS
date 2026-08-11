@@ -173,7 +173,9 @@ int CmdDiagnose::execute(int argc, char** argv) {
     });
     std::cout << "\n";
 
-    bool isApiError = (fullText.find("[API Error]") != std::string::npos || fullText.find("\"error\":") != std::string::npos);
+    bool isApiError = (fullText.find("[API Error]") != std::string::npos ||
+                       fullText.find("[LLM Unavailable]") != std::string::npos ||
+                       fullText.find("\"error\":") != std::string::npos);
     if (!gotAnyText || isApiError) {
         if (isApiError) std::cout << "\n[!] LLM returned an API error -- falling back to raw output.\n\n";
         else std::cout << "\n[!] LLM produced no response -- falling back to raw output.\n\n";

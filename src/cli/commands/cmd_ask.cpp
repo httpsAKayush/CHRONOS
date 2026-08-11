@@ -168,7 +168,9 @@ int CmdAsk::execute(int argc, char** argv) {
     });
     std::cout << "\n";
 
-    bool isApiError = (fullText.find("[API Error]") != std::string::npos || fullText.find("\"error\":") != std::string::npos);
+    bool isApiError = (fullText.find("[API Error]") != std::string::npos ||
+                       fullText.find("[LLM Unavailable]") != std::string::npos ||
+                       fullText.find("\"error\":") != std::string::npos);
 
     if (!gotAnyText || isApiError) {
         if (isApiError) {

@@ -2,6 +2,7 @@
 
 #include "chronos/infrastructure/codex.hpp"
 #include "chronos/infrastructure/vector_index.hpp"
+#include "chronos/infrastructure/config.hpp"
 #include "chronos/ipc.hpp"
 #include "chronos/use_cases/context_builder.hpp"
 #include "chronos/use_cases/oracle.hpp"
@@ -33,5 +34,14 @@ std::vector<BfsRow> bfsCollect(Codex& codex, const std::string& startId, bool ou
 std::string execCmdOutput(const std::string& cmd);
 bool checkStagingCollision(const std::string& stagedLine, const std::string& syntheticMsg);
 void wakeDaemon(const std::string& repoRoot);
+
+// True if a quick HTTP GET to the endpoint succeeds (used to distinguish
+// "provider unreachable" from "provider returned no usable text").
+bool endpointReachable(const std::string& url);
+
+// Human-readable diagnostic describing which LLM provider was active and why
+// it could not produce a response. Derived from the persisted config, so the
+// user always sees the provider they configured.
+std::string llmUnavailableMessage(const Config& cfg);
 
 } // namespace chronos

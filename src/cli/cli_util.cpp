@@ -1,4 +1,5 @@
 #include "chronos/cli/cli_util.hpp"
+#include <httplib.h>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -357,6 +358,67 @@ bool checkStagingCollision(const std::string& stagedLine, const std::string& syn
     }
 
     return false;
+}
+
+bool endpointReachable(const std::string& url) {
+    if (url.empty()) return false;
+    std::string host = url;
+    int port = 80;
+    bool ssl = false;
+
+    if (host.find("http://") == 0) host = host.substr(7);
+    else if (host.find("https://") == 0) { host = host.substr(8); ssl = true; port = 443; }
+
+    size_t slash = host.find('/');
+    if (slash != std::string::npos) host = host.substr(0, slash);
+
+    size_t colon = host.find(':');
+    if (colon != std::string::npos) {
+        port = std::stoi(host.substr(colon + 1));
+        host = host.substr(0, colon);
+    } else if (ssl) {
+        port = 443;
+    }
+
+    httplib::Client cli(host, port);
+    cli.set_connection_timeout(1, 0);
+    cli.set_read_timeout(2, 0);
+    auto res = cli.Get("/");
+    return res && (res->status == 200 || res->status == 404);
+}
+
+std::string llmUnavailableMessage(const Config& cfg) {
+    std::string mode = cfg.providerMode();
+
+    if (mode == "local") {
+        std::string url = cfg.localUrl();
+        std::string model = cfg.localModel();
+        std::string state = endpointReachable(url) ? "reachable but returned no response"
+                                                   : "NOT reachable";
+        return "Configured provider is 'local' (Ollama) at " + url +
+               " (model: " + model + ") — it is " + state +
+               ". Start it with `ollama serve` (or `systemctl start ollama`), "
+               "or switch providers: `chronos config set llm.provider auto`.";
+    }
+
+    if (mode == "cloud") {
+        std::string url = cfg.cloudUrl();
+        std::string model = cfg.cloudModel();
+        std::string state = endpointReachable(url) ? "reachable but returned no response"
+                                                   : "NOT reachable";
+        return "Configured provider is 'cloud' at " + url +
+               " (model: " + model + ") — it is " + state +
+               ". Check the endpoint URL and key with `chronos config list`.";
+    }
+
+    std::string cUrl = cfg.cloudUrl();
+    std::string lUrl = cfg.localUrl();
+    std::string cloudState = endpointReachable(cUrl) ? "reachable, no response" : "unreachable";
+    std::string localState = endpointReachable(lUrl) ? "reachable, no response" : "unreachable";
+    return "Provider mode is 'auto' (cloud first, local fallback) but both failed. "
+           "Cloud (" + cUrl + "): " + cloudState + ". "
+           "Local (" + lUrl + "): " + localState + ". "
+           "Run `chronos status` to review your LLM configuration.";
 }
 
 } // namespace chronos

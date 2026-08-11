@@ -24,6 +24,7 @@
 #include "chronos/ipc.hpp"
 #include "chronos/infrastructure/codex.hpp"
 #include "chronos/use_cases/oracle.hpp"
+#include "chronos/cli/cli_util.hpp"
 #include "chronos/env.hpp"
 
 using namespace chronos;
@@ -89,6 +90,9 @@ int main(int argc, char** argv) {
             std::string result = llm->complete(
                 req.systemPromptOverride.empty() ? "You are a helpful assistant." : req.systemPromptOverride,
                 req.userQuery, 2048);
+            if (result.empty()) {
+                result = "[LLM Unavailable] " + llmUnavailableMessage(config);
+            }
             ChronosResponseChunk chunk;
             chunk.traceId = req.traceId;
             chunk.textDelta = result;
