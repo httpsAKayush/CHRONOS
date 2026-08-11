@@ -1,41 +1,3 @@
-// chronos: the Querier CLI/TUI (Spec §5 Interaction Model). Deliberately a
-// CLI, not an IDE plugin (Spec §2 non-goal), to keep zero coupling with
-// heavy IDE environments.
-//
-// Hexagonal Architecture: this file is the composition root. It performs
-// Dependency Injection — building the adapters (Config, Codex storage,
-// VectorIndex, ILLMClient) once and wiring them into the Command objects.
-// No business logic lives here; each subcommand is dispatched to a
-// dedicated ICommand implementation.
-//
-// Subcommands:
-//   chronos init                 -- create .chronos/, add to .gitignore, install git hook
-//   chronos ask "<query>"        -- full two-hop retrieval + LLM synthesis (FR-2..FR-4, FR-7, FR-8)
-//   chronos trace <traceId>      -- Spec §9 Observability: replay which nodes backed an answer
-//   chronos sync                 -- Spec §11 mitigation: repair Codex state if hooks were bypassed
-
-#include <filesystem>
-#include <iostream>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
-
-#include "chronos/cli/commands.hpp"
-#include "chronos/cli/cli_context.hpp"
-#include "chronos/env.hpp"
-#include "chronos/infrastructure/config.hpp"
-#include "chronos/infrastructure/codex.hpp"
-#include "chronos/infrastructure/vector_index.hpp"
-#include "chronos/infrastructure/llm/llm_client_factory.hpp"
-
-namespace fs = std::filesystem;
-using namespace chronos;
-
-namespace {
-
-void printHelp() {
-    std::cout << R"(
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  Chronos — The Temporal Codebase Engine                                      │
 │  Understand any codebase. Ask questions. Get precise, cited answers.         │
@@ -132,6 +94,7 @@ FIRST-TIME SETUP (copy-paste this sequence)
 
 # 5. INDEX YOUR CODEBASE
     chronos sync
+    chronos sync --history # with commit history graph
     # First run takes 10–60s depending on repo size. Subsequent runs are instant.
 
 # 6. START USING
@@ -195,57 +158,3 @@ GET HELP FOR ANY COMMAND
     # e.g. chronos sync --help, chronos ask --help
 
 ──────────────────────────────────────────────────────────────────────────────
-)";
-}
-
-} // namespace
-
-int main(int argc, char** argv) {
-    if (argc < 2 || std::string(argv[1]) == "help" || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
-        printHelp();
-        return (argc < 2) ? 2 : 0;
-    }
-    std::string cmd = argv[1];
-    std::string repoRoot = fs::current_path().string();
-
-    auto env = loadEnv(repoRoot);
-    for (const auto& [k, v] : env) {
-        setenv(k.c_str(), v.c_str(), 1);
-    }
-
-    Config globalConfig;
-
-    auto llm = createLLMClient(globalConfig);
-
-    CliContext ctx{
-        .repoRoot = repoRoot,
-        .config = std::make_shared<Config>(globalConfig),
-        .storage = std::make_shared<Codex>(repoRoot),
-        .vectors = std::make_shared<VectorIndex>(repoRoot),
-        .llm = std::move(llm)
-    };
-
-    std::unordered_map<std::string, std::unique_ptr<ICommand>> commands;
-    commands["init"] = std::make_unique<CmdInit>(ctx);
-    commands["sync"] = std::make_unique<CmdSync>(ctx);
-    commands["ask"] = std::make_unique<CmdAsk>(ctx);
-    commands["explain"] = std::make_unique<CmdExplain>(ctx);
-    commands["map"] = std::make_unique<CmdMap>(ctx);
-    commands["diagnose"] = std::make_unique<CmdDiagnose>(ctx);
-    commands["trace"] = std::make_unique<CmdTrace>(ctx);
-    commands["timeline"] = std::make_unique<CmdTimeline>(ctx);
-    commands["check-staging"] = std::make_unique<CmdCheckStaging>(ctx);
-    commands["status"] = std::make_unique<CmdStatus>(ctx);
-    commands["config"] = std::make_unique<CmdConfig>(ctx);
-    commands["export"] = std::make_unique<CmdExport>(ctx);
-    commands["clean"] = std::make_unique<CmdClean>(ctx);
-
-    auto it = commands.find(cmd);
-    if (it == commands.end()) {
-        std::cerr << "Unknown command: " << cmd << "\n";
-        printHelp();
-        return 1;
-    }
-
-    return it->second->execute(argc, argv);
-}

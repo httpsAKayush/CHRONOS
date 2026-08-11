@@ -125,7 +125,18 @@ int CmdSync::execute(int argc, char** argv) {
               << indexer.stats().nodesSkippedIdempotent << " already up to date, "
               << indexer.stats().nodesUpserted << " updated)\n";
 
-    if (ctx_.llm && ctx_.llm->isAvailable()) {
+    // Only run hierarchical context ingestion if:
+    // 1. There were actual node updates (new/modified files), OR
+    // 2. Context nodes don't exist yet (first run)
+    bool contextExists = false;
+    try {
+        auto globalNode = codex.getNode("[GLOBAL:REPO]");
+        contextExists = globalNode && globalNode->is_active;
+    } catch (...) {}
+
+    bool hasUpdates = indexer.stats().nodesUpserted > 0;
+
+    if (ctx_.llm && ctx_.llm->isAvailable() && (hasUpdates || !contextExists)) {
         std::cout << "\n[ Hierarchical Context Ingestion ]\n";
         std::cout << "Profiling subsystems...\n";
         RepoProfiler profiler(ctx_.repoRoot);
@@ -133,6 +144,8 @@ int CmdSync::execute(int argc, char** argv) {
         HierarchicalSummarizer summarizer(codex, *ctx_.llm);
         int contextNodes = summarizer.run(profiles);
         std::cout << "Wrote " << contextNodes << " context nodes ([CONTEXT:DIR:...] + [GLOBAL:REPO]).\n";
+    } else if (contextExists) {
+        std::cout << "\n[ Hierarchical Context ] Up to date — skipping.\n";
     } else {
         std::cout << "\n[ Hierarchical Context ] LLM unavailable — skipping subsystem summaries.\n";
     }

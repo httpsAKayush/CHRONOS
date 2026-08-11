@@ -18,16 +18,16 @@ int CmdStatus::execute(int argc, char** argv) {
 
     fs::path codexPath = fs::path(repoRoot) / ".chronos" / "codex.db";
     if (!fs::exists(codexPath)) {
-        std::cerr << "Index not found.\n";
+        std::cerr << "Index not found. Run `chronos init` first.\n";
         return 1;
     }
     auto sizeBytes = fs::file_size(codexPath);
     double sizeMB = static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
 
     Codex& codex = *ctx_.storage;
-    int nodeCount = 0, edgeCount = 0;
+    int nodeCount = 0, edgeCount = 0, functionCount = 0, contextCount = 0;
     sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM nodes", -1, &stmt, nullptr) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM nodes WHERE is_active=1", -1, &stmt, nullptr) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) nodeCount = sqlite3_column_int(stmt, 0);
         sqlite3_finalize(stmt);
     }
@@ -35,16 +35,31 @@ int CmdStatus::execute(int argc, char** argv) {
         if (sqlite3_step(stmt) == SQLITE_ROW) edgeCount = sqlite3_column_int(stmt, 0);
         sqlite3_finalize(stmt);
     }
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM nodes WHERE is_active=1 AND parse_confidence > 0.0", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) functionCount = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(*) FROM nodes WHERE is_active=1 AND kind = 'context'", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) contextCount = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+
+    int activeFiles = 0;
+    if (sqlite3_prepare_v2(codex.raw(), "SELECT COUNT(DISTINCT file_path) FROM nodes WHERE is_active=1", -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) activeFiles = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
 
     std::string commitHash = "unknown";
+    std::string branchName = "detached";
     fs::path headPath = fs::path(repoRoot) / ".git" / "HEAD";
     if (fs::exists(headPath)) {
         std::ifstream in(headPath);
         std::string line;
         if (std::getline(in, line)) {
-            if (line.rfind("ref: ", 0) == 0) {
-                std::string refPath = line.substr(5);
-                fs::path refFile = fs::path(repoRoot) / ".git" / refPath;
+            if (line.rfind("ref: refs/heads/", 0) == 0) {
+                branchName = line.substr(16);
+                fs::path refFile = fs::path(repoRoot) / ".git" / line.substr(5);
                 if (fs::exists(refFile)) {
                     std::ifstream refIn(refFile);
                     if (std::getline(refIn, commitHash)) {
@@ -95,39 +110,67 @@ int CmdStatus::execute(int argc, char** argv) {
         sqlite3_finalize(stmt);
     }
 
-    std::string activeLLM = "llama3 (local)";
+    std::string activeLLM = "none";
     std::string llmMode = "auto";
+    std::string cloudUrl = "not configured";
+    std::string localUrl = "not configured";
+    bool cloudConfigured = false;
+    bool localConfigured = false;
     if (ctx_.config) {
         auto cfg = static_cast<Config&>(*ctx_.config);
         std::string model = cfg.model();
         if (!model.empty()) activeLLM = model;
         llmMode = cfg.providerMode();
+        cloudUrl = cfg.cloudUrl();
+        localUrl = cfg.localUrl();
+        cloudConfigured = cfg.cloudConfigured();
+        localConfigured = cfg.localConfigured();
     }
 
-    std::cout << "[ CHRONOS SYSTEM STATUS ]\n\n";
+    std::cout << R"(
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  CHRONOS SYSTEM STATUS                                                  │
+  └──────────────────────────────────────────────────────────────────────────┘)";
 
-    std::cout << "--- Structural Graph (codex.db) ---\n";
-    std::cout << "Database Size : " << sizeMB << " MB\n";
-    std::cout << "Graph Nodes   : " << nodeCount << "\n";
-    std::cout << "Graph Edges   : " << edgeCount << "\n\n";
+    std::cout << "\n\n  ┌─ Structural Graph ──────────────────────────────────────────────────────\n";
+    std::cout << "  │ Database    : " << sizeMB << " MB\n";
+    std::cout << "  │ Nodes       : " << nodeCount << " (" << functionCount << " functions, " << contextCount << " context)\n";
+    std::cout << "  │ Edges       : " << edgeCount << "\n";
+    std::cout << "  │ Files       : " << activeFiles << " indexed\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n";
 
-    std::cout << "--- Semantic Index (vectors.bin) ---\n";
-    std::cout << "Vector Size   : " << vectorSizeMB << " MB\n";
-    std::cout << "Embeddings    : " << embedCount << "\n\n";
+    std::cout << "\n  ┌─ Semantic Index ──────────────────────────────────────────────────────\n";
+    std::cout << "  │ Vector DB   : " << vectorSizeMB << " MB\n";
+    std::cout << "  │ Embeddings  : " << embedCount << "\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n";
 
-    std::cout << "--- Temporal Index ---\n";
-    std::cout << "History Depth : " << historyDepth << " commits indexed\n";
-    std::cout << "Keyframes     : " << keyframes << " structural mutations mapped\n\n";
+    std::cout << "\n  ┌─ Temporal Index ─────────────────────────────────────────────────────\n";
+    std::cout << "  │ Commits     : " << historyDepth << " indexed\n";
+    std::cout << "  │ Keyframes   : " << keyframes << " structural mutations\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n";
 
-    std::cout << "--- System Health ---\n";
+    std::cout << "\n  ┌─ Git ─────────────────────────────────────────────────────────────────\n";
+    std::cout << "  │ Branch      : " << branchName << "\n";
+    std::cout << "  │ HEAD        : " << commitHash << "\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n";
+
+    std::cout << "\n  ┌─ LLM Provider ────────────────────────────────────────────────────────\n";
+    std::cout << "  │ Mode        : " << llmMode;
+    if (llmMode == "auto") std::cout << " (cloud first, local fallback)";
+    std::cout << "\n";
+    std::cout << "  │ Active      : " << activeLLM << "\n";
+    std::cout << "  │ Local       : " << (localConfigured ? localUrl : "(not configured)") << "\n";
+    std::cout << "  │ Cloud       : " << (cloudConfigured ? cloudUrl : "(not configured)") << "\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n";
+
+    std::cout << "\n  ┌─ Daemon ──────────────────────────────────────────────────────────────\n";
     if (pid > 0) {
-        std::cout << "Daemon State  : RUNNING (PID " << pid << ")\n";
+        std::cout << "  │ State       : RUNNING (PID " << pid << ")\n";
     } else {
-        std::cout << "Daemon State  : " << statusStr << "\n";
+        std::cout << "  │ State       : " << statusStr << "\n";
     }
-    std::cout << "Synced Commit : " << commitHash << "\n";
-    std::cout << "LLM Mode      : " << llmMode << " (auto = cloud first, local fallback)\n";
-    std::cout << "Active LLM    : " << activeLLM << "\n";
+    std::cout << "  └──────────────────────────────────────────────────────────────────────\n\n";
+
     return 0;
 }
 
