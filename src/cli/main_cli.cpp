@@ -180,6 +180,52 @@ COMMON WORKFLOWS
     # Export graph for visualization:
     chronos export --format mermaid > graph.mmd
 
+    # Let AI write your commit message:
+    git add -A && chronos commit
+
+──────────────────────────────────────────────────────────────────────────────
+AI COMMIT MESSAGES (chronos commit)
+──────────────────────────────────────────────────────────────────────────────
+
+    Writes a Conventional Commit message for your staged changes and commits
+    them for you — no more staring at a blank terminal after coding.
+
+    # 1. Stage the changes you want to commit:
+    git add -A
+    #    (or `git add <file>...` for only some changes)
+
+    # 2. Generate the message and commit:
+    chronos commit
+
+    What happens under the hood:
+      [1/3] Collecting staged changes...   → runs `git diff --cached`
+      [2/3] Waking LLM daemon...           → starts chronos-daemon on demand
+      [3/3] Generating commit message...   → your active LLM (local or cloud)
+                                            reads the diff and writes the message
+      --- Staged files ---
+      --- Proposed commit message ---
+      Accept this commit message? [Y/n/e]  → your review step
+
+    Confirmation prompt:
+      Y or Enter   Accept the message and run `git commit` right away
+      n            Abort — nothing is committed, your staged changes stay intact
+      e            Open $EDITOR (default vi) to rewrite the message, then commit
+
+    Options:
+      chronos commit --all     Stage everything first (tracked + untracked)
+      chronos commit --amend   Amend the last commit instead of creating a new one
+      chronos commit --yes     Accept without confirmation (for scripts/CI)
+
+    Generated messages follow Conventional Commits:
+      <type>(<scope>): <subject>
+      e.g. feat(calc): add divide function
+      types: feat, fix, refactor, docs, chore, test, perf, build, ci, style, revert
+      subject: imperative mood, lowercase, under 50 chars, no trailing period
+
+    No staged changes? chronos commit explains what to do and exits cleanly.
+    LLM message looks wrong? Press n to abort or e to edit — you always see
+    the message before anything is committed.
+
 ──────────────────────────────────────────────────────────────────────────────
 GLOBAL INSTALLATION (make chronos available everywhere)
 ──────────────────────────────────────────────────────────────────────────────
