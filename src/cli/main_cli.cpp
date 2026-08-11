@@ -65,6 +65,9 @@ CORE COMMANDS
                          chronos timeline serve/tcp_server.py
     check-staging        Prevent "Temporal Collisions" before committing
                          chronos check-staging --strict
+    commit               AI commit message for staged changes (Conventional Commits)
+                         chronos commit
+                         chronos commit --all --amend
 
 SYSTEM MANAGEMENT
     status               Daemon health, graph size, system state
@@ -239,6 +242,7 @@ int main(int argc, char** argv) {
     commands["config"] = std::make_unique<CmdConfig>(ctx);
     commands["export"] = std::make_unique<CmdExport>(ctx);
     commands["clean"] = std::make_unique<CmdClean>(ctx);
+    commands["commit"] = std::make_unique<CmdCommit>(ctx);
 
     auto it = commands.find(cmd);
     if (it == commands.end()) {

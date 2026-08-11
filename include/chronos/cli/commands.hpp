@@ -148,4 +148,15 @@ private:
     const CliContext& ctx_;
 };
 
+class CmdCommit : public ICommand {
+public:
+    explicit CmdCommit(const CliContext& ctx);
+    int execute(int argc, char** argv) override;
+    std::string name() const override { return "commit"; }
+    std::string description() const override { return "Generate a Conventional Commit message from staged changes and commit"; }
+
+private:
+    const CliContext& ctx_;
+};
+
 } // namespace chronos

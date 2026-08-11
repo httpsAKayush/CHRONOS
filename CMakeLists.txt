@@ -145,6 +145,7 @@ add_executable(chronos
   src/cli/commands/cmd_config.cpp
   src/cli/commands/cmd_export.cpp
   src/cli/commands/cmd_clean.cpp
+  src/cli/commands/cmd_commit.cpp
 )
 target_link_libraries(chronos PRIVATE chronos_core)
 

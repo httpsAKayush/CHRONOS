@@ -1,3 +1,4 @@
+
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  Chronos — The Temporal Codebase Engine                                      │
 │  Understand any codebase. Ask questions. Get precise, cited answers.         │
@@ -27,6 +28,9 @@ CORE COMMANDS
                          chronos timeline serve/tcp_server.py
     check-staging        Prevent "Temporal Collisions" before committing
                          chronos check-staging --strict
+    commit               AI commit message for staged changes (Conventional Commits)
+                         chronos commit
+                         chronos commit --all --amend
 
 SYSTEM MANAGEMENT
     status               Daemon health, graph size, system state
@@ -94,7 +98,6 @@ FIRST-TIME SETUP (copy-paste this sequence)
 
 # 5. INDEX YOUR CODEBASE
     chronos sync
-    chronos sync --history # with commit history graph
     # First run takes 10–60s depending on repo size. Subsequent runs are instant.
 
 # 6. START USING

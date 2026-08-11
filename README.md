@@ -16,6 +16,7 @@ Chronos is a static-analysis + LLM engine that builds a **temporal codebase grap
 - **Ghost Bug Diagnosis (`diagnose`)** — walk backward from a stack trace
 - **Temporal Indexing** — structural mutations tracked across git history (`timeline`)
 - **Temporal Collision detection** (`check-staging`) — catch stale references before you commit
+- **AI commit messages** (`commit`) — generate a Conventional Commit message from your staged diff and commit with one confirmation
 - **Dual-profile LLM** — auto-switching between local (Ollama) and cloud endpoints
 - **Trace inspection** (`trace`) — see exactly what context the LLM was given
 - **Graph export** (`export`) — JSON or Mermaid for visualization
@@ -149,6 +150,11 @@ chronos trace crash-a116c6e0
 
 # Prevent temporal collisions before committing
 chronos check-staging --strict
+
+# Generate an AI commit message for your staged changes
+git add -A
+chronos commit          # review + confirm, or:
+chronos commit --yes    # auto-accept (non-interactive)
 ```
 
 ---
@@ -166,6 +172,7 @@ chronos check-staging --strict
 | `trace <traceId>` | Inspect the context graph for a trace ID |
 | `timeline <path>` | Structural mutation history for a file/symbol |
 | `check-staging` | Temporal Collision prevention |
+| `commit` | AI-generated Conventional Commit message from staged changes |
 | `status` | Daemon health, graph size, system state |
 | `config` | Manage LLM keys, providers, environment |
 | `export` | Dump structural graph to JSON or Mermaid |
