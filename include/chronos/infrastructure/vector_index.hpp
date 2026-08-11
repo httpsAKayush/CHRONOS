@@ -48,6 +48,7 @@ public:
 
     void upsert(const EmbeddingRecord& rec);
     void remove(const std::string& nodeId);
+    void save() const;
 
     // Hop 1 of Two-Hop Retrieval
     // Includes a temporal decay applied over `queryTimestamp` (or current time if 0)

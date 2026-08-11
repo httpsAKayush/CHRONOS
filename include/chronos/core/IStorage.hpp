@@ -54,6 +54,11 @@ public:
     virtual void updateAiSummary(const std::string& nodeId, const std::string& summary) = 0;
     virtual void tombstoneNode(const std::string& nodeId) = 0;
     virtual void upsertEdge(const Edge& e) = 0;
+    // Phase 3 "Hierarchical Context Ingestion": upserts a zero-byte span
+    // context node (kind='context') such as [CONTEXT:DIR:src/cli] or
+    // [GLOBAL:REPO]. Distinct from upsertNode because context nodes carry no
+    // source byte range.
+    virtual void upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary) = 0;
     virtual void appendHistory(const HistoryEntry& h) = 0;
     virtual void recordAlias(const std::string& oldId, const std::string& newId, const std::string& commitHash) = 0;
     virtual std::string resolveAlias(const std::string& id) = 0;

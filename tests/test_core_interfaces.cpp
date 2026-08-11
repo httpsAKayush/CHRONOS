@@ -12,6 +12,7 @@ class MockStorage : public IStorage {
 public:
     void upsertNode(const Node& n) override { lastNode_ = n; }
     void updateAiSummary(const std::string& nodeId, const std::string& summary) override { (void)nodeId; (void)summary; }
+    void upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary) override { (void)id; (void)filePath; (void)summary; }
     void tombstoneNode(const std::string& nodeId) override { (void)nodeId; }
     void upsertEdge(const Edge& e) override { (void)e; }
     void appendHistory(const HistoryEntry& h) override { (void)h; }
@@ -44,6 +45,17 @@ private:
 
 class MockLLMClient : public ILLMClient {
 public:
+    std::string complete(const std::string& systemPrompt, const std::string& userQuery, int maxTokens) override {
+        (void)systemPrompt; (void)maxTokens;
+        return "complete:" + userQuery;
+    }
+    bool stream(const std::string& systemPrompt, const std::string& userQuery, int maxTokens,
+                const std::function<void(const std::string&)>& onChunk) override {
+        (void)systemPrompt; (void)maxTokens;
+        onChunk("chunk");
+        return true;
+    }
+    std::vector<float> embed(const std::string& text) override { (void)text; return {1.0f}; }
     std::string query(const std::string& prompt) override { return "response:" + prompt; }
     std::string generateSummary(const std::string& codeSnippet) override { return "summary:" + codeSnippet; }
     bool isAvailable() const override { return true; }

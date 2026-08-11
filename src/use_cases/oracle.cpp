@@ -24,15 +24,20 @@ std::string Oracle::renderTrace(const TraceResult& traceRes) const {
         out << "CONFIDENCE: " << (n.parse_confidence >= 0.5f ? "HIGH (Structured AST Node)" : "LOW (Whole-File Degrade)") << "\n";
         out << "--------------------------------------------------------------------------------\n";
 
-        std::string fullPath = repoRoot_ + "/" + n.file_path;
-        std::ifstream in(fullPath, std::ios::binary);
-        if (in) {
-            std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            int64_t start = std::max<int64_t>(0LL, static_cast<long long>(n.byte_start));
-            int64_t end = std::min<int64_t>(static_cast<int64_t>(content.size()), n.byte_end);
-            if (end > start) {
-                out << content.substr(start, end - start);
-                if (content.substr(start, end - start).back() != '\n') out << '\n';
+        // Context nodes ([GLOBAL:REPO], [CONTEXT:DIR:...]) have no source bytes.
+        if (n.byte_end <= n.byte_start || n.byte_end == 0) {
+            out << "(context node — no source bytes)\n";
+        } else {
+            std::string fullPath = repoRoot_ + "/" + n.file_path;
+            std::ifstream in(fullPath, std::ios::binary);
+            if (in) {
+                std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                int64_t start = std::max<int64_t>(0LL, static_cast<long long>(n.byte_start));
+                int64_t end = std::min<int64_t>(static_cast<int64_t>(content.size()), n.byte_end);
+                if (end > start) {
+                    out << content.substr(start, end - start);
+                    if (content.substr(start, end - start).back() != '\n') out << '\n';
+                }
             }
         }
         out << "================================================================================\n";

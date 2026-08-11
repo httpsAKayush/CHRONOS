@@ -1,5 +1,6 @@
 #include "chronos/domain/ast_indexer.hpp"
 #include "chronos/domain/simhash.hpp"
+#include "chronos/domain/vendor_filter.hpp"
 #include <fstream>
 #include <sstream>
 #include <random>
@@ -61,6 +62,10 @@ AstIndexer::AstIndexer(Codex& codex, VectorIndex& vectors, const std::string& re
     : codex_(codex), vectors_(vectors), repoRoot_(repoRoot) {}
 
 void AstIndexer::removeFile(const std::string& relativePath) {
+    // Phase 3 "Vendor Filtering": vendor paths are never indexed, so their
+    // tombstone pass is a no-op as well.
+    if (isVendorPath(relativePath)) return;
+
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(codex_.raw(), "SELECT id FROM nodes WHERE file_path = ?1 AND is_active = 1;",
                         -1, &stmt, nullptr);
@@ -361,6 +366,9 @@ void walk_query(TSNode root, const std::string& source, const TSLanguage* lang, 
 #endif
 
 void AstIndexer::indexFile(const std::string& relativePath, const std::string& commitHash, int64_t timestamp) {
+    // Phase 3 "Vendor Filtering": skip irrelevant subtrees entirely.
+    if (isVendorPath(relativePath)) return;
+
     std::string fullPath = (fs::path(repoRoot_) / relativePath).string();
     if (!fs::exists(fullPath)) { removeFile(relativePath); return; }
 
@@ -371,6 +379,9 @@ void AstIndexer::indexFile(const std::string& relativePath, const std::string& c
 
 std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, const std::string& relativePath, const std::string& commitHash, int64_t timestamp) {
     std::vector<std::string> processedNodes;
+    // Phase 3 "Vendor Filtering": guard the buffer path too (rename/aliases
+    // fed from git history re-enter through here).
+    if (isVendorPath(relativePath)) return processedNodes;
     ++stats_.filesProcessed;
     if (source.empty()) { removeFile(relativePath); return processedNodes; }
 
@@ -457,6 +468,13 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
 
                 if (existing) {
                     nodeId = existing->id;
+                    if (!vectors_.contains(nodeId)) {
+                        std::string snippet = source.substr(span.byteStart, span.byteEnd - span.byteStart);
+                        MemoryTier tier = getMemoryTier(timestamp);
+                        if (tier != MemoryTier::Cold) {
+                            vectors_.upsert({nodeId, embedText(snippet), timestamp, tier});
+                        }
+                    }
                 } else {
                     nodeId = makeUuid();
 
@@ -548,6 +566,12 @@ degrade:
         if (existing) {
             ++stats_.nodesSkippedIdempotent;
             processedNodes.push_back(existing->id);
+            if (!vectors_.contains(existing->id)) {
+                MemoryTier tier = getMemoryTier(timestamp);
+                if (tier != MemoryTier::Cold) {
+                    vectors_.upsert({existing->id, embedText(source), timestamp, tier});
+                }
+            }
             return processedNodes;
         }
 

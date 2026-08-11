@@ -1,5 +1,6 @@
 #include "chronos/infrastructure/vector_index.hpp"
-#include "chronos/infrastructure/llm_config.hpp"
+#include "chronos/infrastructure/llm/llm_client_factory.hpp"
+#include "chronos/infrastructure/config.hpp"
 #include <filesystem>
 #include <fstream>
 #include <unordered_map>
@@ -189,24 +190,29 @@ VectorIndex::VectorIndex(const std::string& repoRoot) {
 }
 
 VectorIndex::~VectorIndex() {
+    save();
+    delete impl_;
+}
+
+void VectorIndex::save() const {
     impl_->alg_hnsw->saveIndex(path_);
-    
+
     std::string meta_path = path_;
     meta_path.replace(meta_path.find("vectors.bin"), 11, "vectors_meta.bin");
     std::ofstream out(meta_path, std::ios::binary | std::ios::trunc);
-    
+
     uint32_t magic = 0x53513831;
     out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&impl_->next_label), sizeof(impl_->next_label));
     size_t count = impl_->id_to_label.size();
     out.write(reinterpret_cast<const char*>(&count), sizeof(count));
-    
+
     for (const auto& [id, label] : impl_->id_to_label) {
         out.write(reinterpret_cast<const char*>(&label), sizeof(label));
         uint32_t idLen = static_cast<uint32_t>(id.size());
         out.write(reinterpret_cast<const char*>(&idLen), sizeof(idLen));
         out.write(id.data(), idLen);
-        
+
         int64_t ts = impl_->timestamps[label];
         out.write(reinterpret_cast<const char*>(&ts), sizeof(ts));
 
@@ -219,8 +225,6 @@ VectorIndex::~VectorIndex() {
             out.write(reinterpret_cast<const char*>(sq.data.data()), dataLen);
         }
     }
-    
-    delete impl_;
 }
 
 void VectorIndex::upsert(const EmbeddingRecord& rec) {
@@ -326,67 +330,26 @@ std::vector<float> embedText(const std::string& text) {
     std::vector<float> vec(VectorIndex::kDim, 0.f);
     if (text.empty()) return vec;
 
-    LlmConfig conf = loadLlmConfig();
-    if (!conf.apiUrl.empty()) {
-        std::string embedUrl = conf.apiUrl;
-        size_t pos = embedUrl.find("/chat/completions");
-        if (pos != std::string::npos) {
-            embedUrl.replace(pos, 17, "/embeddings");
-        }
+    static bool llmEmbedFailed = false;
 
-        std::string escapedText;
-        for (char c : text) {
-            if (c == '"' || c == '\\') escapedText += '\\';
-            else if (c == '\n') escapedText += "\\n";
-            else escapedText += c;
-        }
-        
-        std::string body = "{\"input\":\"" + escapedText + "\",\"model\":\"" + conf.modelName + "\"}";
-        
-        std::string tmpFile = "/tmp/chronos_vec_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + ".json";
-        {
-            std::ofstream out(tmpFile);
-            out << body;
-        }
-
-        std::string authHeader = conf.apiKey.empty() ? "" : "-H \"Authorization: Bearer " + conf.apiKey + "\" ";
-        std::string cmd = "curl -s --connect-timeout 2 --max-time 10 " + embedUrl + " "
-                          "-H \"Content-Type: application/json\" "
-                          + authHeader +
-                          "-d @" + tmpFile;
-                              
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (pipe) {
-            char buffer[128];
-            std::string result = "";
-            while (!feof(pipe)) {
-                if (fgets(buffer, 128, pipe) != nullptr) result += buffer;
-            }
-            pclose(pipe);
-            std::remove(tmpFile.c_str());
-            
-            size_t dataPos = result.find("\"embedding\": [");
-            if (dataPos != std::string::npos) {
-                size_t start = dataPos + 14;
-                size_t end = result.find("]", start);
-                if (end != std::string::npos) {
-                    std::string vecStr = result.substr(start, end - start);
-                    std::vector<float> v;
-                    std::istringstream ss(vecStr);
-                    std::string token;
-                    while (std::getline(ss, token, ',')) {
-                        v.push_back(std::stof(token));
-                    }
-                    if (v.size() > 0) {
-                        for (size_t i = 0; i < std::min<size_t>(v.size(), VectorIndex::kDim); ++i) vec[i] = v[i];
-                        return vec;
-                    }
+    if (!llmEmbedFailed) {
+        Config cfg;
+        auto client = createLLMClient(cfg);
+        if (client && client->isAvailable()) {
+            auto emb = client->embed(text);
+            if (emb.size() >= static_cast<size_t>(VectorIndex::kDim)) {
+                for (int i = 0; i < VectorIndex::kDim; ++i) vec[i] = emb[i];
+                return vec;
+            } else if (!emb.empty()) {
+                for (size_t i = 0; i < std::min(emb.size(), static_cast<size_t>(VectorIndex::kDim)); ++i) {
+                    vec[i] = emb[i];
                 }
+                return vec;
             }
+            llmEmbedFailed = true;
         }
     }
-    
-    // Fallback: deterministic hashing if Ollama is not running (fail-safe for CI/Tests)
+
     std::string token;
     auto flush = [&]() {
         if (token.empty()) return;
@@ -402,7 +365,7 @@ std::vector<float> embedText(const std::string& text) {
         else flush();
     }
     flush();
-    
+
     double norm = 0;
     for (float v : vec) norm += v * v;
     norm = std::sqrt(norm);

@@ -54,13 +54,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(httplib)
 
-# tree-sitter core + C++ grammar are pulled in as a git submodule / system lib.
-# We link against libtree-sitter and libtree-sitter-cpp if present; the code
-# degrades to "parse_confidence = 0" nodes if the grammar lib is missing so
+# tree-sitter core + grammars are pulled in as a git submodule / system lib.
+# We link against libtree-sitter and grammar libs if present; the code
+# degrades to "parse_confidence = 0" nodes if a grammar lib is missing so
 # the rest of the pipeline (Codex, PPR, IPC, Oracle) stays testable in isolation.
-find_library(TREE_SITTER_LIB tree-sitter)
-find_library(TREE_SITTER_CPP_LIB tree-sitter-cpp)
-find_library(TREE_SITTER_PYTHON_LIB tree-sitter-python)
+# User-local pip-installed grammars live in ~/.local/lib; search there too.
+list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local")
+find_library(TREE_SITTER_LIB tree-sitter HINTS "$ENV{HOME}/.local/lib")
+find_library(TREE_SITTER_CPP_LIB tree-sitter-cpp HINTS "$ENV{HOME}/.local/lib")
+find_library(TREE_SITTER_PYTHON_LIB tree-sitter-python HINTS "$ENV{HOME}/.local/lib")
 
 find_package(Threads REQUIRED)
 
@@ -79,6 +81,15 @@ add_library(chronos_core
   src/infrastructure/vcs/git_indexer.cpp
   src/use_cases/diagnose.cpp
   src/infrastructure/llm/llm_config.cpp
+  src/infrastructure/config.cpp
+  src/infrastructure/llm/llm_client_factory.cpp
+  src/infrastructure/llm/ollama_client.cpp
+  src/infrastructure/llm/openai_client.cpp
+  src/infrastructure/llm/ipc_llm_client.cpp
+  src/use_cases/repo_profiler.cpp
+  src/use_cases/hierarchical_summarizer.cpp
+  src/use_cases/ask_engine.cpp
+  src/cli/cli_util.cpp
 )
 
 target_include_directories(chronos_core PUBLIC include ${SQLITE3_INCLUDE_DIRS} ${libgit2_SOURCE_DIR}/include ${hnswlib_SOURCE_DIR})
@@ -119,7 +130,22 @@ add_executable(chronos-daemon src/daemon/main_daemon.cpp)
 target_link_libraries(chronos-daemon PRIVATE chronos_core)
 
 # --- CLI/TUI querier ---
-add_executable(chronos src/cli/main_cli.cpp)
+add_executable(chronos
+  src/cli/main_cli.cpp
+  src/cli/commands/cmd_init.cpp
+  src/cli/commands/cmd_sync.cpp
+  src/cli/commands/cmd_ask.cpp
+  src/cli/commands/cmd_explain.cpp
+  src/cli/commands/cmd_map.cpp
+  src/cli/commands/cmd_diagnose.cpp
+  src/cli/commands/cmd_trace.cpp
+  src/cli/commands/cmd_timeline.cpp
+  src/cli/commands/cmd_check_staging.cpp
+  src/cli/commands/cmd_status.cpp
+  src/cli/commands/cmd_config.cpp
+  src/cli/commands/cmd_export.cpp
+  src/cli/commands/cmd_clean.cpp
+)
 target_link_libraries(chronos PRIVATE chronos_core)
 
 enable_testing()

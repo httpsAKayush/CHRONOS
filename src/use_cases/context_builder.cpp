@@ -13,18 +13,45 @@ namespace fs = std::filesystem;
 namespace chronos {
 
 namespace {
+
 std::string makeTraceId() {
     static std::mt19937_64 rng{std::random_device{}()};
     std::ostringstream out;
     out << std::hex << rng();
     return out.str();
 }
+
+// Phase 2 "Strict Context Boundaries": hard upper token limit before any
+// RAG payload is sent to the LLM adapter. We estimate tokens as chars/4 and
+// prune context nodes in descending relevance order (drop lowest-MMR last,
+// i.e. remove the least relevant first), truncating individual snippet
+// bytes as needed. nodeIds are always kept so FR-8 citations still resolve.
+constexpr size_t kMaxPayloadTokens = 4000;
+constexpr size_t kMaxPayloadChars = kMaxPayloadTokens * 4;
+
+void enforceTokenBudget(ChronosRequest& req) {
+    size_t totalChars = 0;
+    std::vector<ContextNode> kept;
+    kept.reserve(req.context.size());
+    for (auto& cn : req.context) {
+        size_t available = kMaxPayloadChars - std::min(totalChars, kMaxPayloadChars);
+        if (available == 0) break; // budget exhausted — drop the rest
+        if (cn.codeSnippet.size() > available) {
+            cn.codeSnippet = cn.codeSnippet.substr(0, available); // nodeId preserved for citations
+        }
+        totalChars += cn.codeSnippet.size();
+        kept.push_back(std::move(cn));
+    }
+    req.context = std::move(kept);
 }
+} // namespace
 
 ContextBuilder::ContextBuilder(Codex& codex, VectorIndex& vectors, std::string repoRoot)
     : codex_(codex), vectors_(vectors), repoRoot_(std::move(repoRoot)) {}
 
 std::string ContextBuilder::readLiveSnippet(const Node& n) const {
+    // Context nodes ([GLOBAL:REPO], [CONTEXT:DIR:...]) have no source bytes.
+    if (n.byte_end <= n.byte_start) return "";
     // Ground Truth (project.md I.3): never cache signatures — read live
     // bytes from disk at the exact moment of context assembly.
     // Path-resilient: if the stored path doesn't exist, walk the repo tree
@@ -164,6 +191,9 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
         req.context.push_back(std::move(cn));
     }
 
+    // Phase 2: hard token cap before the payload leaves this use case.
+    enforceTokenBudget(req);
+
     codex_.recordTrace(req.traceId, trace);
 
     result.ok = true;
@@ -174,17 +204,59 @@ BuildResult ContextBuilder::build(const std::string& userQuery, int pprBudget,
 BuildResult ContextBuilder::buildExplain(std::string targetSymbol, const std::string& userQuery) {
     BuildResult result;
 
-    if (targetSymbol.find("sym:") != 0) {
-        targetSymbol = "sym:" + targetSymbol;
-    }
+    // Detect file paths (contains / or ends with a known extension) vs symbol names.
+    bool isFilePath = (targetSymbol.find('/') != std::string::npos ||
+                       targetSymbol.find('.') != std::string::npos);
 
     std::string rootId;
-    try {
-        rootId = codex_.resolveAlias(targetSymbol);
-    } catch (const std::exception& e) {
-        result.ok = false;
-        result.reason = std::string("Lookup failed: ") + e.what();
-        return result;
+    std::vector<std::string> fileNodeIds;
+
+    if (isFilePath) {
+        // File path mode: find all function nodes in this file.
+        std::string path = targetSymbol;
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(codex_.raw(),
+            "SELECT id FROM nodes WHERE file_path = ?1 AND is_active = 1 "
+            "AND parse_confidence > 0.0 ORDER BY byte_start;",
+            -1, &stmt, nullptr);
+        sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            fileNodeIds.emplace_back(
+                reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+        }
+        sqlite3_finalize(stmt);
+
+        if (fileNodeIds.empty()) {
+            // Fallback: try the whole-file node (parse_confidence = 0.0)
+            sqlite3_prepare_v2(codex_.raw(),
+                "SELECT id FROM nodes WHERE file_path = ?1 AND is_active = 1 "
+                "ORDER BY parse_confidence DESC LIMIT 1;",
+                -1, &stmt, nullptr);
+            sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                rootId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            }
+            sqlite3_finalize(stmt);
+            if (rootId.empty()) {
+                result.ok = false;
+                result.reason = "No nodes found for file: " + path;
+                return result;
+            }
+        } else {
+            rootId = fileNodeIds[0];
+        }
+    } else {
+        // Symbol mode: prepend sym: if needed and resolve.
+        if (targetSymbol.find("sym:") != 0) {
+            targetSymbol = "sym:" + targetSymbol;
+        }
+        try {
+            rootId = codex_.resolveAlias(targetSymbol);
+        } catch (const std::exception& e) {
+            result.ok = false;
+            result.reason = std::string("Lookup failed: ") + e.what();
+            return result;
+        }
     }
 
     auto startNode = codex_.getNode(rootId);
@@ -212,20 +284,37 @@ BuildResult ContextBuilder::buildExplain(std::string targetSymbol, const std::st
     req.requireCitations = true;
 
     if (userQuery.empty()) {
-        req.userQuery = "Explain the architectural logic and data flow of this function and its direct dependencies.";
+        req.userQuery = isFilePath
+            ? "Explain the architectural logic, data flow, and structure of all functions in this file."
+            : "Explain the architectural logic and data flow of this function and its direct dependencies.";
     } else {
         req.userQuery = userQuery;
     }
 
-    ContextNode cnTarget;
-    cnTarget.nodeId = startNode->id;
-    cnTarget.filePath = startNode->file_path;
-    cnTarget.codeSnippet = readLiveSnippet(*startNode);
-    cnTarget.uncertain = startNode->parse_confidence < 0.5f;
-    req.context.push_back(std::move(cnTarget));
-
     TraceResult trace;
-    trace.nodes.push_back(*startNode);
+
+    if (isFilePath && fileNodeIds.size() > 1) {
+        // File-path mode: include all function nodes from the file.
+        for (const auto& nid : fileNodeIds) {
+            auto node = codex_.getNode(nid);
+            if (!node || !node->is_active) continue;
+            ContextNode cn;
+            cn.nodeId = node->id;
+            cn.filePath = node->file_path;
+            cn.codeSnippet = readLiveSnippet(*node);
+            cn.uncertain = node->parse_confidence < 0.5f;
+            req.context.push_back(std::move(cn));
+            trace.nodes.push_back(*node);
+        }
+    } else {
+        ContextNode cnTarget;
+        cnTarget.nodeId = startNode->id;
+        cnTarget.filePath = startNode->file_path;
+        cnTarget.codeSnippet = readLiveSnippet(*startNode);
+        cnTarget.uncertain = startNode->parse_confidence < 0.5f;
+        req.context.push_back(std::move(cnTarget));
+        trace.nodes.push_back(*startNode);
+    }
 
     for (const auto& did : depIds) {
         if (did == startNode->id) continue;
@@ -243,6 +332,10 @@ BuildResult ContextBuilder::buildExplain(std::string targetSymbol, const std::st
 
     trace.edges = edges;
     codex_.recordTrace(req.traceId, trace);
+
+    // Phase 2: hard token cap before the payload leaves this use case.
+    enforceTokenBudget(req);
+
     result.rawTrace = trace;
     result.ok = true;
     result.request = std::move(req);

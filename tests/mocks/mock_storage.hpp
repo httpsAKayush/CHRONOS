@@ -28,6 +28,16 @@ public:
         }
     }
 
+    void upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary) override {
+        Node n;
+        n.id = id;
+        n.file_path = filePath;
+        n.ai_summary = summary;
+        n.byte_start = 0;
+        n.byte_end = 0;
+        nodes_[id] = n;
+    }
+
     void tombstoneNode(const std::string& nodeId) override {
         auto it = nodes_.find(nodeId);
         if (it != nodes_.end()) {

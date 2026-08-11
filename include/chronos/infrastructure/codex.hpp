@@ -3,6 +3,11 @@
 // and §6 (Storage & schema choice). This is the "Brain" — CALLS/INHERITS
 // edges, alias-forwarding DAG, intent_summary history, parse_confidence.
 //
+// Hexagonal Architecture (Ports & Adapters): this class is the *Storage
+// Adapter*. It implements the pure IStorage port (chronos/core/IStorage.hpp);
+// all domain/use-case code depends on the interface, never on this concrete
+// type.
+//
 // Design notes:
 //  - Single-file SQLite DB at .chronos/codex.db, WAL mode for concurrent
 //    reader (Querier) / writer (async Indexer worker) access.
@@ -17,43 +22,11 @@
 #include <vector>
 #include <cstdint>
 #include <sqlite3.h>
+#include "chronos/core/IStorage.hpp"
 
 namespace chronos {
 
-struct Node {
-    std::string id;          // UUID
-    std::string file_path;
-    int64_t byte_start = 0;
-    int64_t byte_end = 0;
-    uint64_t simhash = 0;
-    bool is_active = true;
-    float parse_confidence = 1.0f;  // ADDED: Structural Uncertainty (Spec Glossary)
-    std::string ai_summary;
-};
-
-struct Edge {
-    std::string source_id;
-    std::string target_id;
-    std::string type;               // "CALLS" | "INHERITS" | "PROBABLE_TARGET"
-    float probable_target_weight = 1.0f;
-    int start_line = 0;
-    std::string call_site_text;
-};
-
-struct HistoryEntry {
-    std::string node_id;
-    std::string commit_hash;
-    std::string intent_summary;
-};
-
-// Result of a two-hop traversal (Hop 2 in Spec §0 Mechanical Walkthrough).
-struct TraceResult {
-    std::vector<Node> nodes;
-    std::vector<Edge> edges;
-    bool any_low_confidence = false;   // triggers uncertainty_warning (Spec §7)
-};
-
-class Codex {
+class Codex : public IStorage {
 public:
     // Opens (creating if necessary) the Codex at `.chronos/codex.db` under
     // `repoRoot`. Applies schema migrations via PRAGMA user_version (Spec §7
@@ -67,6 +40,7 @@ public:
     // --- Node/Edge mutation (called only from the async indexer worker) ---
     void upsertNode(const Node& n);
     void updateAiSummary(const std::string& nodeId, const std::string& summary);
+    void upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary);
     void tombstoneNode(const std::string& nodeId);            // is_active = false
     void upsertEdge(const Edge& e);
     void appendHistory(const HistoryEntry& h);
@@ -81,13 +55,6 @@ public:
     // --- Imports (Hybrid Scoped Resolution) ---
     void insertFileImport(const std::string& filePath, const std::string& symbolName, const std::string& sourceModule);
     void clearFileImports(const std::string& filePath);
-
-    struct HistoryRecord {
-        std::string nodeId;
-        std::string commitHash;
-        int64_t timestamp;
-        std::string syntheticMsg;
-    };
 
     // --- Temporal ---
     void recordHistory(const std::string& nodeId, const std::string& commitHash, int64_t timestamp, const std::string& msg);

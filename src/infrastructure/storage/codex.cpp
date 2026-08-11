@@ -12,7 +12,7 @@ namespace chronos {
 
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 void execOrThrow(sqlite3* db, const std::string& sql) {
     char* errMsg = nullptr;
@@ -67,7 +67,8 @@ void Codex::migrate() {
                 simhash          INTEGER NOT NULL,
                 is_active        INTEGER NOT NULL,
                 parse_confidence REAL NOT NULL,
-                ai_summary       TEXT
+                ai_summary       TEXT,
+                kind             TEXT NOT NULL DEFAULT 'code'
             );
 
             CREATE TABLE IF NOT EXISTS history (
@@ -125,6 +126,11 @@ void Codex::migrate() {
             // ai_summary was added in v2, but if userVersion < 3 (i.e. v2), it's already there. 
             // the previous implementation tried to add ai_summary in v2->v3 which caused errors.
         }
+        if (userVersion < 4) {
+            // Phase 3 "Hierarchical Context Ingestion": context nodes
+            // ([CONTEXT:DIR:...], [GLOBAL:REPO]) live in the same table.
+            sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN kind TEXT NOT NULL DEFAULT 'code';", nullptr, nullptr, nullptr);
+        }
     }
 
     execOrThrow(db_, "PRAGMA user_version = " + std::to_string(kSchemaVersion) + ";");
@@ -164,6 +170,36 @@ void Codex::upsertNode(const Node& n) {
         std::string err = sqlite3_errmsg(db_);
         sqlite3_finalize(stmt);
         throw std::runtime_error("upsertNode failed: " + err);
+    }
+    sqlite3_finalize(stmt);
+}
+
+void Codex::upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary) {
+    // Phase 3 "Hierarchical Context Ingestion": context nodes have a
+    // zero-byte source span and kind='context'. They never participate in
+    // AST byte-range queries, only in hierarchical retrieval.
+    static const char* sql = R"SQL(
+        INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary, kind)
+        VALUES (?1, ?2, 0, 0, 0, 1, 1.0, ?3, 'context')
+        ON CONFLICT(id) DO UPDATE SET
+            file_path = excluded.file_path,
+            ai_summary = excluded.ai_summary,
+            is_active = 1,
+            kind = 'context';
+    )SQL";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, filePath.c_str(), -1, SQLITE_TRANSIENT);
+    if (!summary.empty()) {
+        sqlite3_bind_text(stmt, 3, summary.c_str(), -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 3);
+    }
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        std::string err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("upsertContextNode failed: " + err);
     }
     sqlite3_finalize(stmt);
 }
@@ -384,7 +420,7 @@ void Codex::recordHistory(const std::string& nodeId, const std::string& commitHa
     sqlite3_finalize(stmt);
 }
 
-std::vector<Codex::HistoryRecord> Codex::getHistory(const std::string& nodeId) {
+std::vector<HistoryRecord> Codex::getHistory(const std::string& nodeId) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
         "SELECT node_id, commit_hash, timestamp, synthetic_msg FROM history "
@@ -392,7 +428,7 @@ std::vector<Codex::HistoryRecord> Codex::getHistory(const std::string& nodeId) {
         -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
     
-    std::vector<Codex::HistoryRecord> records;
+    std::vector<HistoryRecord> records;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         HistoryRecord rec;
         rec.nodeId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
@@ -406,7 +442,7 @@ std::vector<Codex::HistoryRecord> Codex::getHistory(const std::string& nodeId) {
     return records;
 }
 
-std::vector<Codex::HistoryRecord> Codex::getHistoryForFile(const std::string& filePath) {
+std::vector<HistoryRecord> Codex::getHistoryForFile(const std::string& filePath) {
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_,
         "SELECT h.node_id, h.commit_hash, h.timestamp, h.synthetic_msg "
@@ -415,7 +451,7 @@ std::vector<Codex::HistoryRecord> Codex::getHistoryForFile(const std::string& fi
         -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, filePath.c_str(), -1, SQLITE_TRANSIENT);
     
-    std::vector<Codex::HistoryRecord> records;
+    std::vector<HistoryRecord> records;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         HistoryRecord rec;
         rec.nodeId = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
