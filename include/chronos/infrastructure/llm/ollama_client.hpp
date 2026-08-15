@@ -14,10 +14,11 @@ public:
                          const std::string& userQuery,
                          int maxTokens = 2048) override;
 
-    bool stream(const std::string& systemPrompt,
-                const std::string& userQuery,
-                int maxTokens,
+    bool stream(const std::string& systemPrompt, const std::string& userQuery, int maxTokens,
                 const std::function<void(const std::string&)>& onChunk) override;
+
+    bool streamChat(const std::vector<ChatMessage>& messages, int maxTokens,
+                    const std::function<void(const std::string&)>& onChunk) override;
 
     std::vector<float> embed(const std::string& text) override;
 

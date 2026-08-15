@@ -252,7 +252,7 @@ void extractImports(TSNode rootNode, const std::string& source, std::vector<std:
     }
 }
 
-void collectTokens(TSNode rootNode, std::vector<StructuralToken>& out) {
+void collectTokens(TSNode rootNode, const std::string& source, std::vector<StructuralToken>& out) {
     std::vector<TSNode> stack;
     stack.push_back(rootNode);
     while (!stack.empty()) {
@@ -262,10 +262,18 @@ void collectTokens(TSNode rootNode, std::vector<StructuralToken>& out) {
 
         const char* type = ts_node_type(node);
         std::string t(type);
-        // Skip pure identifier/type leaves; keep control structure & operators.
-        if (t != "identifier" && t != "type_identifier" && t != "field_identifier") {
+        
+        // Include actual text for identifiers/types to prevent false-positive simhash collisions
+        // across functions with identical structural shape.
+        if (t == "identifier" || t == "type_identifier" || t == "field_identifier" || t == "string" || t == "string_content") {
+            std::string text = extractText(node, source);
+            if (!text.empty()) {
+                out.push_back({text, 1});
+            }
+        } else {
             out.push_back({t, 1});
         }
+        
         uint32_t n = ts_node_child_count(node);
         for (uint32_t i = 0; i < n; ++i) {
             stack.push_back(ts_node_child(node, n - 1 - i));
@@ -289,7 +297,7 @@ void walk(TSNode rootNode, const std::string& source, std::vector<FunctionSpan>&
             span.byteEnd = ts_node_end_byte(node);
             span.name = findFirstIdentifier(node, source);
             extractCalls(node, source, span.outgoingCalls);
-            collectTokens(node, span.tokens);
+            collectTokens(node, source, span.tokens);
             spans.push_back(std::move(span));
             
             // Only return if it's a leaf structure to prevent over-nesting, but we want methods inside classes!
@@ -347,7 +355,7 @@ void walk_query(TSNode root, const std::string& source, const TSLanguage* lang, 
                 span.byteStart = ts_node_start_byte(capture.node);
                 span.byteEnd = ts_node_end_byte(capture.node);
                 extractCalls(capture.node, source, span.outgoingCalls);
-                collectTokens(capture.node, span.tokens);
+                collectTokens(capture.node, source, span.tokens);
                 has_def = true;
             } else if (capture_name == "node.name") {
                 span.name = extractText(capture.node, source);
@@ -499,6 +507,7 @@ std::vector<std::string> AstIndexer::indexBuffer(const std::string& source, cons
                 n.byte_end = span.byteEnd;
                 n.simhash = hash;
                 n.is_active = true;
+                n.signature = span.name;  // Function/class signature for FTS5
                 // A function that individually parsed clean still inherits
                 // the file's overall syntax-error state as a soft signal --
                 // e.g. a malformed sibling function elsewhere in the file

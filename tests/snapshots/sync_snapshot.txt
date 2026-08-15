@@ -2,3 +2,8 @@
 [1/3] Building Structural Graph (Parsing ASTs)... Done.
 [2/3] Generating Semantic Index (Vectorizing)... Done.
 chronos sync: re-checked 2 files (0 already up to date, 4 updated)
+
+[ Hierarchical Context Ingestion ]
+Profiling subsystems...
+Detected dominant language: cpp
+Wrote 1 context nodes ([CONTEXT:DIR:...] + [GLOBAL:REPO]).

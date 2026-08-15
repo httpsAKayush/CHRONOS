@@ -21,10 +21,13 @@
 #include "chronos/core/IStorage.hpp"
 #include "chronos/core/ILLMClient.hpp"
 #include "chronos/infrastructure/vector_index.hpp"
-#include "chronos/infrastructure/llm/ipc_llm_client.hpp"
+#include "chronos/infrastructure/vector_index.hpp"
+#include "chronos/core/ILLMClient.hpp"
 #include "chronos/ipc.hpp"
+#include "chronos/daemon/session_manager.hpp"
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace chronos {
 
@@ -38,31 +41,41 @@ struct AskResult {
 
 class AskEngine {
 public:
-    AskEngine(IStorage& storage, VectorIndex& vectors, IpcLLMClient& llm,
-              const std::string& repoRoot);
+    AskEngine(IStorage& storage, VectorIndex& vectors, ILLMClient& llm,
+              const std::string& repoRoot, SessionManager* sessionManager = nullptr);
 
-    AskResult run(const std::string& query);
+    AskResult run(const std::string& query, const std::string& sessionId = "");
 
 private:
     IStorage& storage_;
     VectorIndex& vectors_;
-    IpcLLMClient& llm_;
+    ILLMClient& llm_;
     std::string repoRoot_;
+    SessionManager* sessionManager_;
 
     // Step 1
     std::string fetchRepoSummary();
 
-    // Step 2 — zero-shot HyDE
+    // Step 2 — zero-shot HyDE (language-aware)
     std::string generateHypothetical(const std::string& repoSummary,
-                                     const std::string& query);
+                                     const std::string& query,
+                                     const std::string& language);
 
-    // Step 3
-    std::vector<SeedMatch> targetedSearch(const std::string& hypothetical, int topK);
+    // Step 3 — Hybrid search: HyDE + raw query
+    std::vector<SeedMatch> targetedSearch(const std::string& hypothetical,
+                                           const std::string& query,
+                                           int topK);
+
+    // Step 3b — Structural Graph Expansion: detect explicit file/symbol mentions
+    // and directly traverse the Codex graph to boost them above semantic hits.
+    std::vector<SeedMatch> structuralExpand(const std::string& query,
+                                             const std::vector<SeedMatch>& rrfSeeds);
 
     // Step 4 — assemble final payload
     ChronosRequest synthesize(const std::vector<SeedMatch>& seeds,
                               const std::string& query,
-                              const std::string& traceId);
+                              const std::string& traceId,
+                              const std::string& sessionId);
 };
 
 } // namespace chronos

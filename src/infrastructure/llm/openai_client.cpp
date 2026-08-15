@@ -80,34 +80,44 @@ bool OpenAIClient::stream(const std::string& systemPrompt,
                           const std::string& userQuery,
                           int maxTokens,
                           const std::function<void(const std::string&)>& onChunk) {
+    return streamChat({{"system", systemPrompt}, {"user", userQuery}}, maxTokens, onChunk);
+}
+
+bool OpenAIClient::streamChat(const std::vector<ChatMessage>& msg_history,
+                              int maxTokens,
+                              const std::function<void(const std::string&)>& onChunk) {
     httplib::Client cli(host_, port_);
+    if (ssl_) {
+        // Just rely on cpp-httplib's default cert loading if built with OpenSSL
+        cli.enable_server_certificate_verification(false);
+    }
     cli.set_connection_timeout(5, 0);
     cli.set_read_timeout(30, 0);
     cli.set_write_timeout(30, 0);
-    if (ssl_) cli.enable_server_certificate_verification(false);
 
     nlohmann::json body;
     body["model"] = model_;
     body["max_tokens"] = maxTokens;
     body["stream"] = true;
     body["messages"] = nlohmann::json::array();
-    if (!systemPrompt.empty()) {
-        body["messages"].push_back({{"role", "system"}, {"content", systemPrompt}});
+    for (const auto& msg : msg_history) {
+        if (!msg.content.empty()) {
+            body["messages"].push_back({{"role", msg.role}, {"content", msg.content}});
+        }
     }
-    body["messages"].push_back({{"role", "user"}, {"content", userQuery}});
 
     httplib::Request req;
     req.method = "POST";
     req.path = basePath_ + "/chat/completions";
-    req.headers = {{"Content-Type", "application/json"}};
-    if (!apiKey_.empty() && apiKey_ != "ollama") {
-        req.headers.emplace("Authorization", "Bearer " + apiKey_);
-    }
+    req.headers = {
+        {"Content-Type", "application/json"},
+        {"Authorization", "Bearer " + apiKey_}
+    };
     req.body = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 
     bool gotContent = false;
     bool cleanEnd = false;
-
+    
     req.response_handler = [&](const httplib::Response& res) -> bool {
         if (res.status != 200) {
             if (!gotContent) {
@@ -150,9 +160,7 @@ bool OpenAIClient::stream(const std::string& systemPrompt,
 
     auto res = cli.send(req);
     if (!res || res->status != 200) {
-        if (!gotContent) {
-            onChunk("[API Error] Failed to connect or non-200 response");
-        }
+        if (!gotContent) onChunk("[API Error] Connection failed to " + host_);
         return false;
     }
 

@@ -177,6 +177,9 @@ void GitIndexer::indexHistory(int syncDepthChoice) {
                 if (isLockfile(path)) {
                     return 0; // Lockfiles evaluate to score 0
                 }
+                if (path.front() == '.' || path.find("/.") != std::string::npos) {
+                    return 0; // Skip hidden files/folders
+                }
 
                 git_blob* new_blob = nullptr;
                 git_blob* old_blob = nullptr;

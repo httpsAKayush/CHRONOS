@@ -46,6 +46,9 @@ public:
     explicit VectorIndex(const std::string& repoRoot);
     ~VectorIndex();
 
+    VectorIndex(const VectorIndex&) = delete;
+    VectorIndex& operator=(const VectorIndex&) = delete;
+
     void upsert(const EmbeddingRecord& rec);
     void remove(const std::string& nodeId);
     void save() const;

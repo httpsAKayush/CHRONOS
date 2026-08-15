@@ -12,6 +12,7 @@
 #include <vector>
 #include <functional>
 #include <optional>
+#include <unistd.h>
 
 namespace chronos {
 
@@ -27,6 +28,7 @@ struct ContextNode {
 struct ChronosRequest {
     std::string command = "ask";      // e.g. "ask" or "summarize"
     std::string traceId;              // Spec §9 Observability "Traceability ID"
+    std::string sessionId;            // Target session UUID (for stateful chat mode)
     std::string userQuery;
     std::string systemPromptOverride; // Allows --explain to change LLM behavior
     std::vector<ContextNode> context;
@@ -70,7 +72,21 @@ public:
     // free VRAM immediately rather than finishing an unwatched stream.
     void interrupt();
 
+    IpcClient() = default;
     ~IpcClient();
+
+    // Prevent copy, allow move
+    IpcClient(const IpcClient&) = delete;
+    IpcClient& operator=(const IpcClient&) = delete;
+    IpcClient(IpcClient&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+    IpcClient& operator=(IpcClient&& other) noexcept {
+        if (this != &other) {
+            if (fd_ >= 0) ::close(fd_);
+            fd_ = other.fd_;
+            other.fd_ = -1;
+        }
+        return *this;
+    }
 
 private:
     int fd_ = -1;

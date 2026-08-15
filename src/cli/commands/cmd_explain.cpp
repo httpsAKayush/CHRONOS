@@ -12,18 +12,27 @@ CmdExplain::CmdExplain(const CliContext& ctx) : ctx_(ctx) {}
 
 int CmdExplain::execute(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "usage: chronos explain <symbol> [--query \"<question>\"]\n";
+        std::cerr
+            << "usage: chronos explain <target> [--query \"<question>\"]\n\n"
+            << "  <target> formats:\n"
+            << "    agent/decision.py                  -- explain whole file\n"
+            << "    agent/decision.py::learn            -- explain specific function\n"
+            << "    agent/decision.py::QLearningDecision-- explain class + all methods\n"
+            << "    QLearningDecision                   -- explain bare symbol (any file)\n\n"
+            << "  Options:\n"
+            << "    --query \"<question>\"  Focus the explanation on a specific question\n";
         return 2;
     }
-    std::string symbol = argv[2];
-    std::string query = "";
+
+    std::string target = argv[2];
+    std::string query  = "";
     for (int i = 3; i < argc; ++i) {
         if (std::string(argv[i]) == "--query" && i + 1 < argc) {
             query = argv[++i];
         }
     }
 
-    Codex& codex = *ctx_.storage;
+    Codex& codex       = *ctx_.storage;
     VectorIndex& vectors = *ctx_.vectors;
     ContextBuilder builder(codex, vectors, ctx_.repoRoot);
     Oracle oracle(codex, ctx_.repoRoot);
@@ -41,12 +50,16 @@ int CmdExplain::execute(int argc, char** argv) {
     }
 
     std::cout << "[2/3] Analyzing structure...\n";
-    BuildResult built = builder.buildExplain(symbol, query);
+    BuildResult built = builder.buildExplain(target, query);
 
     if (!built.ok) {
-        std::cout << built.reason << "\n";
+        std::cerr << built.reason << "\n";
         return 1;
     }
+
+    // Show what we assembled so the user can see the retrieval worked
+    std::cerr << "[Explain] Assembled " << built.request.context.size()
+              << " context block(s) for target: " << target << "\n";
 
     if (!daemonUp) {
         std::cout << "[!] LLM daemon unavailable -- falling back to Oracle-Only Mode.\n\n";
@@ -61,7 +74,8 @@ int CmdExplain::execute(int argc, char** argv) {
         fullResponse += chunk.textDelta;
     });
 
-    std::cout << "\n\nTraceability ID: " << built.request.traceId << "  (run `chronos trace " << built.request.traceId << "` later)\n";
+    std::cout << "\n\nTraceability ID: " << built.request.traceId
+              << "  (run `chronos trace " << built.request.traceId << "` later)\n";
     return 0;
 }
 

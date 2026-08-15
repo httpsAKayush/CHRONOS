@@ -16,6 +16,8 @@ struct Node {
     bool is_active = true;
     float parse_confidence = 1.0f;
     std::string ai_summary;
+    std::string signature;   // function/class signature for FTS5 search
+    std::string kind = "code";  // "code" or "context" for [CONTEXT:DIR:...] and [GLOBAL:REPO]
 };
 
 struct Edge {
@@ -79,6 +81,13 @@ public:
     virtual std::optional<TraceResult> getTrace(const std::string& traceId) = 0;
     virtual TraceResult localPushPPR(const std::string& seedNodeId, int budget, double dampingFactor = 0.85) = 0;
     virtual TraceResult localPushPPR(const std::vector<std::string>& seeds, int budget, double dampingFactor = 0.85) = 0;
+    
+    // Repo metadata for language detection and other repo-level settings
+    virtual void setRepoMetadata(const std::string& key, const std::string& value) = 0;
+    virtual std::optional<std::string> getRepoMetadata(const std::string& key) = 0;
+
+    // FTS5 lexical search channel (Priority 4)
+    virtual std::vector<std::string> ftsSearch(const std::string& query, int limit) = 0;
 };
 
 } // namespace chronos

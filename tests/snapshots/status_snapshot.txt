@@ -1,19 +1,38 @@
-[ CHRONOS SYSTEM STATUS ]
 
---- Structural Graph (codex.db) ---
-Database Size : 0.0664062 MB
-Graph Nodes   : 8
-Graph Edges   : 5
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  CHRONOS SYSTEM STATUS                                                  │
+  └──────────────────────────────────────────────────────────────────────────┘
 
---- Semantic Index (vectors.bin) ---
-Vector Size   : 0.0240784 MB
-Embeddings    : 4
+  ┌─ Structural Graph ──────────────────────────────────────────────────────
+  │ Database    : 0.09375 MB
+  │ Nodes       : 5 (5 functions, 1 context)
+  │ Edges       : 5
+  │ Files       : 3 indexed
+  └──────────────────────────────────────────────────────────────────────
 
---- Temporal Index ---
-History Depth : 2 commits indexed
-Keyframes     : 0 structural mutations mapped
+  ┌─ Semantic Index ──────────────────────────────────────────────────────
+  │ Vector DB   : 0.0240784 MB
+  │ Embeddings  : 4
+  └──────────────────────────────────────────────────────────────────────
 
---- System Health ---
-Daemon State  : RUNNING (PID 307699)
-Synced Commit : 3eccccd1
-Active LLM    : llama3.1:8b
+  ┌─ Temporal Index ─────────────────────────────────────────────────────
+  │ Commits     : 2 indexed
+  │ Keyframes   : 0 structural mutations
+  └──────────────────────────────────────────────────────────────────────
+
+  ┌─ Git ─────────────────────────────────────────────────────────────────
+  │ Branch      : main
+  │ HEAD        : 3eccccd1
+  └──────────────────────────────────────────────────────────────────────
+
+  ┌─ LLM Provider ────────────────────────────────────────────────────────
+  │ Mode        : cloud
+  │ Active      : auto/coding
+  │ Local       : http://localhost:11434
+  │ Cloud       : http://localhost:20128/v1
+  └──────────────────────────────────────────────────────────────────────
+
+  ┌─ Daemon ──────────────────────────────────────────────────────────────
+  │ State       : RUNNING
+  └──────────────────────────────────────────────────────────────────────
+

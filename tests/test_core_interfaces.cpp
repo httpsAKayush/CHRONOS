@@ -39,6 +39,13 @@ public:
     TraceResult localPushPPR(const std::string& seedNodeId, int budget, double dampingFactor = 0.85) override { (void)seedNodeId; (void)budget; (void)dampingFactor; return {}; }
     TraceResult localPushPPR(const std::vector<std::string>& seeds, int budget, double dampingFactor = 0.85) override { (void)seeds; (void)budget; (void)dampingFactor; return {}; }
 
+    // Repo Metadata
+    void setRepoMetadata(const std::string& key, const std::string& value) override { (void)key; (void)value; }
+    std::optional<std::string> getRepoMetadata(const std::string& key) override { (void)key; return std::nullopt; }
+
+    // FTS5
+    std::vector<std::string> ftsSearch(const std::string& query, int limit) override { (void)query; (void)limit; return {}; }
+
 private:
     std::optional<Node> lastNode_;
 };
@@ -53,6 +60,9 @@ public:
                 const std::function<void(const std::string&)>& onChunk) override {
         (void)systemPrompt; (void)maxTokens;
         onChunk("chunk");
+        return true;
+    }
+    bool streamChat(const std::vector<ChatMessage>&, int, const std::function<void(const std::string&)>&) override {
         return true;
     }
     std::vector<float> embed(const std::string& text) override { (void)text; return {1.0f}; }

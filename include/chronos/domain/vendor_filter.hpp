@@ -10,11 +10,10 @@
 namespace chronos {
 
 inline bool isVendorPath(const std::string& path) {
+    if (path.front() == '.' || path.find("/.") != std::string::npos) return true;
     static const char* kSkipDirs[] = {
         "vendor/",   "build/",    "external/",
-        "tests/",    "node_modules/", ".chronos/",
-        ".git/",     ".dev_trash/", "dist/",
-        ".agents/"
+        "tests/",    "node_modules/", "dist/"
     };
     for (const auto* seg : kSkipDirs) {
         if (path.find(seg) != std::string::npos) return true;

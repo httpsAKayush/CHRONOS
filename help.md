@@ -1,4 +1,3 @@
-
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  Chronos — The Temporal Codebase Engine                                      │
 │  Understand any codebase. Ask questions. Get precise, cited answers.         │
@@ -9,13 +8,24 @@ USAGE
 
 CORE COMMANDS
     init                 Initialize .chronos/ in current repo, install git hook
+                         Dot-folders (.agent, .planning, .vscode, etc.) are auto-skipped
     sync                 Index codebase → parse ASTs → build graph & vector index
-    ask "question"       Conceptual questions (Discovery Mode)
+    ask "question"       Conceptual questions with Structural Graph Expansion (Discovery Mode)
                          chronos ask "where is the connection pooler configured?"
-                         chronos ask "why is the UDP multicast failing?" --crash crash.log
-    explain <symbol>     Symbol-level detail (Surgery Mode)
-                         chronos explain initialize_multicast
+                         chronos ask "how does learn() persist state?"
+                         chronos ask "what is phase 3 and who calls it?"
+    explain <target>     Cross-linked deep-dive into a file, class, or function (Surgery Mode)
+                         -- Whole file:
+                         chronos explain agent/decision.py
                          chronos explain serve/tcp_server.py --query "what port does this bind to?"
+                         -- Specific function (follows CALLS edges into other files):
+                         chronos explain agent/decision.py::learn
+                         chronos explain agent/decision.py::learn --query "how does it persist state?"
+                         -- Specific class (pulls all methods + cross-links):
+                         chronos explain agent/decision.py::QLearningDecision
+                         -- Bare symbol name (resolves across the whole repo):
+                         chronos explain QLearningDecision
+                         chronos explain initialize_multicast
     map <symbol>         Architectural X-Ray — upstream/downstream call graph
                          chronos map initialize_multicast --downstream
                          chronos map initialize_multicast --upstream
@@ -75,9 +85,11 @@ FIRST-TIME SETUP (copy-paste this sequence)
     cd /path/to/your/project
     chronos init
     # Creates .chronos/, adds to .gitignore, installs pre-commit hook
+    # Note: dot-folders (.agent, .planning, .vscode, .git, etc.) are
+    # automatically skipped during indexing.
 
 # 4. CONFIGURE LLM (choose ONE profile)
-    # ── LOCAL (Ollama, free, offline, fast) ───────────────────────────────
+    # ── LOCAL (Ollama, free, offline, fast) ──────────────────────────────────────────
     # Install Ollama first: https://ollama.com
     curl -fsSL https://ollama.com/install.sh | sh
     ollama pull llama3.1:8b   # or mistral, codellama, etc.
@@ -87,7 +99,7 @@ FIRST-TIME SETUP (copy-paste this sequence)
     chronos config set llm.local.key ollama
     chronos config set llm.local.model llama3.1:8b
 
-    # ── CLOUD (NVIDIA / OpenRouter / OpenAI) ──────────────────────────────
+    # ── CLOUD (NVIDIA / OpenRouter / OpenAI) ──────────────────────────────────
     # Get API key from: https://platform.openai.com  or  https://openrouter.ai  or  https://build.nvidia.com
     chronos config set llm.provider auto
     chronos config set llm.cloud.url https://api.openai.com/v1
@@ -102,9 +114,67 @@ FIRST-TIME SETUP (copy-paste this sequence)
 
 # 6. START USING
     chronos ask "how does authentication work?"
-    chronos explain login_handler --query "what validation does it do?"
+    chronos explain agent/login_handler.py --query "what validation does it do?"
+    chronos explain agent/login_handler.py::LoginHandler   # class + all methods
     chronos map login_handler --downstream
     chronos status
+
+──────────────────────────────────────────────────────────────────────────────
+──────────────────────────────────────────────────────────────────────────────
+HOW RETRIEVAL WORKS (chronos ask)
+──────────────────────────────────────────────────────────────────────────────
+
+    chronos ask uses a stateful 4-step HyDE RAG pipeline:
+
+    Step 0 — Query Rewriting (Stateful Session)
+             Uses conversation history to intelligently resolve pronouns in
+             follow-up questions (e.g., "what does it do?"). Leverages Delta
+             Context Assembly to reuse KV caches and save tokens on local LLMs.
+
+    Step 1 — Repo Summary Fetch
+             Grabs the architectural [GLOBAL:REPO] summary for context.
+
+    Step 2 — HyDE Hypothetical Generation
+             Asks the LLM to generate a hypothetical code answer based on
+             the repo summary. Corrects for semantic hallucination drift.
+
+    Step 3 — Hybrid Search (Dense + Sparse + Structural)
+             a) Dense vector search (HyDE-embedded query)
+             b) FTS5 keyword search on code signatures
+             c) RRF fusion of both channels
+             d) Structural Graph Expansion (NEW):
+                • Explicit mentions: "decision file" → boosts all decision.py nodes
+                • FTS5 frequency: files appearing 3+ times in keyword hits become
+                  implicit anchors (catches "phase 3 learning" → e2e_learning_flow.py)
+                • Local-Push PPR walk from anchors to surface callers/callees
+
+    Step 4 — Synthesis
+             Assembles up to 32,000 chars of grounded code context.
+             Each node snippet capped at 8,000 chars (full function bodies).
+             Cites every claim with [node:id] references.
+
+──────────────────────────────────────────────────────────────────────────────
+HOW EXPLAIN WORKS (chronos explain)
+──────────────────────────────────────────────────────────────────────────────
+
+    explain uses a 5-tier context assembly (NOT semantic search):
+
+    TIER 1 — File header (first 3,000 chars: imports, module docstring)
+    TIER 2 — Primary nodes (full code of exactly what was requested)
+    TIER 3 — CONTAINS children (all methods when a class is requested)
+    TIER 4 — CALLS cross-links (callees in other files, e.g. dao::set_q)
+    TIER 5 — IMPORTS file headers + repo architectural summary
+
+    Target format table:
+      file.py                  → all AST nodes in the file
+      file.py::function_name   → function + cross-linked callees
+      file.py::ClassName       → class + all its methods + cross-links
+      SymbolName               → resolved by alias or FTS5 fallback
+
+    Context budget: 32,000 chars / 8k tokens (10k per snippet).
+    ask vs explain:
+      chronos ask  — semantic search across the whole repo, best for discovery
+      chronos explain — scope-locked to a target, best for deep dives
 
 ──────────────────────────────────────────────────────────────────────────────
 LLM CONFIGURATION (dual-profile, auto-switching)
@@ -130,6 +200,16 @@ LLM CONFIGURATION (dual-profile, auto-switching)
 ──────────────────────────────────────────────────────────────────────────────
 COMMON WORKFLOWS
 ──────────────────────────────────────────────────────────────────────────────
+
+    # Ask a conceptual question across the whole codebase:
+    chronos ask "how does the Q-learning agent persist its state?"
+    chronos ask "what is phase 3 and who calls it?"
+    chronos ask "where is the connection pooler configured?"
+
+    # Explain a specific file / class / function:
+    chronos explain agent/decision.py
+    chronos explain agent/decision.py::QLearningDecision
+    chronos explain agent/decision.py::learn --query "how does it persist state?"
 
     # After pulling changes, repair index if hook was bypassed:
     chronos sync

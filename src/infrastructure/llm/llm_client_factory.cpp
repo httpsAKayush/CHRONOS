@@ -15,6 +15,9 @@ public:
     bool stream(const std::string&, const std::string&, int, const std::function<void(const std::string&)>&) override {
         return false;
     }
+    bool streamChat(const std::vector<ChatMessage>&, int, const std::function<void(const std::string&)>&) override {
+        return false;
+    }
     std::vector<float> embed(const std::string&) override { return {}; }
     bool isAvailable() const override { return false; }
 };
@@ -44,6 +47,18 @@ public:
         });
         if (gotAny || primaryOk) return true;
         return fallback_->stream(systemPrompt, userQuery, maxTokens, onChunk);
+    }
+
+    bool streamChat(const std::vector<ChatMessage>& messages, int maxTokens,
+                    const std::function<void(const std::string&)>& onChunk) override {
+        bool gotAny = false;
+        bool primaryOk = primary_->streamChat(messages, maxTokens, [&](const std::string& c) {
+            if (c.rfind("[API Error]", 0) == 0) return;
+            gotAny = true;
+            onChunk(c);
+        });
+        if (gotAny || primaryOk) return true;
+        return fallback_->streamChat(messages, maxTokens, onChunk);
     }
 
     std::vector<float> embed(const std::string& text) override {

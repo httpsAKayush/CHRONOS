@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <unordered_map>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -15,7 +17,40 @@ constexpr size_t kMaxHeadersChars = 6000;
 constexpr size_t kMaxHeaderLinesPerFile = 12;
 constexpr size_t kMaxTreeEntries = 200;
 constexpr size_t kMaxRootDocChars = 8000;
+
+std::string detectDominantLanguageImpl(const fs::path& repoRoot) {
+    std::unordered_map<std::string, int> extCounts;
+    std::vector<std::string> codeExts = {".py", ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".kt", ".swift"};
+    
+    try {
+        for (auto& entry : fs::recursive_directory_iterator(repoRoot, fs::directory_options::skip_permission_denied)) {
+            if (!entry.is_regular_file()) continue;
+            if (isVendorPath(entry.path().generic_string())) continue;
+            std::string ext = entry.path().extension().string();
+            if (std::find(codeExts.begin(), codeExts.end(), ext) != codeExts.end()) {
+                extCounts[ext]++;
+            }
+        }
+    } catch (...) {}
+    
+    if (extCounts.empty()) return "python";
+    
+    auto maxIt = std::max_element(extCounts.begin(), extCounts.end(),
+        [](const auto& a, const auto& b) { return a.second < b.second; });
+    
+    std::string ext = maxIt->first;
+    if (ext == ".py") return "python";
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" || ext == ".h" || ext == ".hpp") return "cpp";
+    if (ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx") return "typescript";
+    if (ext == ".rs") return "rust";
+    if (ext == ".go") return "go";
+    if (ext == ".java") return "java";
+    if (ext == ".kt") return "kotlin";
+    if (ext == ".swift") return "swift";
+    return "python";
 }
+
+} // namespace anonymous
 
 RepoProfiler::RepoProfiler(std::string repoRoot) : repoRoot_(std::move(repoRoot)) {}
 
@@ -149,6 +184,10 @@ std::vector<std::string> RepoProfiler::rootDocs() const {
         docs.push_back("===== " + std::string(name) + " =====\n" + content);
     }
     return docs;
+}
+
+std::string RepoProfiler::detectDominantLanguage() const {
+    return detectDominantLanguageImpl(fs::path(repoRoot_));
 }
 
 } // namespace chronos

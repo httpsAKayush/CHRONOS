@@ -16,34 +16,20 @@ namespace chronos {
 CmdAsk::CmdAsk(const CliContext& ctx) : ctx_(ctx) {}
 
 int CmdAsk::execute(int argc, char** argv) {
-    if (argc < 3) {
-        std::cerr << "usage: chronos ask \"<query>\" [--crash <file>]\n";
-        return 2;
-    }
-    std::string query = argv[2];
+    std::string query;
     std::string crashFile;
+    std::string sessionId = "";
 
-    size_t crashPos = query.find("--crash");
-    if (crashPos != std::string::npos) {
-        std::string rem = query.substr(crashPos);
-        query = query.substr(0, crashPos);
-        if (rem == "--crash" && argc > 3) {
-            crashFile = argv[3];
-        } else if (rem.length() > 7 && rem[7] == '=') {
-            crashFile = rem.substr(8);
-        } else if (rem.length() > 7) {
-            crashFile = rem.substr(7);
-        }
-    } else {
-        for (int i = 3; i < argc; ++i) {
-            std::string arg = argv[i];
-            if (arg == "--crash" && i + 1 < argc) {
-                crashFile = argv[++i];
-            } else if (arg.rfind("--crash=", 0) == 0) {
-                crashFile = arg.substr(8);
-            } else if (arg.length() > 7 && arg.substr(0, 7) == "--crash") {
-                crashFile = arg.substr(7);
-            }
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--crash" && i + 1 < argc) {
+            crashFile = argv[++i];
+        } else if (arg.rfind("--crash=", 0) == 0) {
+            crashFile = arg.substr(8);
+        } else if (arg == "--session" && i + 1 < argc) {
+            sessionId = argv[++i];
+        } else {
+            query += (query.empty() ? "" : " ") + arg;
         }
     }
 
@@ -128,19 +114,30 @@ int CmdAsk::execute(int argc, char** argv) {
             }
         }
     } else {
-        // Phase 4: Use AskEngine's 4-step HyDE pipeline instead of naive embedText
-        IpcLLMClient ipcLlm(ctx_.repoRoot);
-        AskEngine askEngine(codex, vectors, ipcLlm, ctx_.repoRoot);
-        auto askResult = askEngine.run(query);
+        // Phase 4: Use AskEngine in Daemon (Stateful Chat Session if sessionId provided)
+        ChronosRequest req;
+        req.command = "ask_chat";
+        req.userQuery = query;
+        req.sessionId = sessionId;
 
-        if (!askResult.ok) {
-            std::cout << askResult.reason << "\n";
-            return 0;
+        IpcClient client;
+        if (!client.connect(socketPathForRepo(ctx_.repoRoot))) {
+            std::cerr << "[!] Could not connect to chronos-daemon. Run 'chronos sync' first.\n";
+            return 1;
         }
 
-        built.ok = askResult.ok;
-        built.request = std::move(askResult.request);
-        built.rawTrace = std::move(askResult.rawTrace);
+        std::cout << "\n";
+        bool streamOk = client.sendAndStream(req, [](const ChronosResponseChunk& chunk) {
+            std::cout << chunk.textDelta << std::flush;
+        });
+
+        if (!streamOk) {
+            std::cerr << "\n[!] Daemon unreachable or failed during stream.\n";
+            return 1;
+        }
+
+        std::cout << "\n";
+        return 0;
     }
 
     if (!built.ok) {

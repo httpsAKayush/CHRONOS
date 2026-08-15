@@ -89,6 +89,7 @@ add_library(chronos_core
   src/use_cases/repo_profiler.cpp
   src/use_cases/hierarchical_summarizer.cpp
   src/use_cases/ask_engine.cpp
+  src/daemon/session_manager.cpp
   src/cli/cli_util.cpp
 )
 
@@ -126,7 +127,9 @@ add_executable(chronos-indexer src/daemon/main_indexer.cpp)
 target_link_libraries(chronos-indexer PRIVATE chronos_core)
 
 # --- Daemon: owns the AF_UNIX socket + lazy LLM execution tier ---
-add_executable(chronos-daemon src/daemon/main_daemon.cpp)
+add_executable(chronos-daemon
+    src/daemon/main_daemon.cpp
+)
 target_link_libraries(chronos-daemon PRIVATE chronos_core)
 
 # --- CLI/TUI querier ---
@@ -135,6 +138,7 @@ add_executable(chronos
   src/cli/commands/cmd_init.cpp
   src/cli/commands/cmd_sync.cpp
   src/cli/commands/cmd_ask.cpp
+  src/cli/commands/cmd_chat.cpp
   src/cli/commands/cmd_explain.cpp
   src/cli/commands/cmd_map.cpp
   src/cli/commands/cmd_diagnose.cpp
@@ -146,6 +150,7 @@ add_executable(chronos
   src/cli/commands/cmd_export.cpp
   src/cli/commands/cmd_clean.cpp
   src/cli/commands/cmd_commit.cpp
+  src/cli/linenoise/linenoise.c
 )
 target_link_libraries(chronos PRIVATE chronos_core)
 

@@ -21,10 +21,13 @@ public:
                          const std::string& userQuery,
                          int maxTokens = 2048) override;
 
-    bool stream(const std::string& systemPrompt,
-                const std::string& userQuery,
-                int maxTokens,
+    bool stream(const std::string& systemPrompt, const std::string& userQuery, int maxTokens,
                 const std::function<void(const std::string&)>& onChunk) override;
+
+    bool streamChat(const std::vector<ChatMessage>& messages, int maxTokens,
+                    const std::function<void(const std::string&)>& onChunk) override {
+        return false; // Not supported over IPC directly, daemon handles it
+    }
 
     std::vector<float> embed(const std::string& text) override;
 

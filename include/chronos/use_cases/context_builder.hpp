@@ -27,9 +27,11 @@ public:
     // checks). `seedConfidenceFloor` implements the unhappy path in Spec §0:
     // "LanceDB cannot find a high-confidence seed -> TUI informs the user to
     // rephrase rather than hallucinating."
+    // `skeletonHops` enables Priority 6: PPR-traversal "hop" nodes return
+    // only node.signature (skeleton) instead of full raw_content.
     BuildResult build(const std::string& userQuery, int pprBudget = 40,
                        int contextNodeBudget = 10, float seedConfidenceFloor = 0.05f,
-                       int64_t queryTimestamp = 0);
+                       int64_t queryTimestamp = 0, bool skeletonHops = true);
 
     // Hyper-Focused payload generation for `chronos explain` mode
     BuildResult buildExplain(std::string targetSymbol, const std::string& userQuery = "");

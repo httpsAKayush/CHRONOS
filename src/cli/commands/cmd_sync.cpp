@@ -19,8 +19,10 @@ CmdSync::CmdSync(const CliContext& ctx) : ctx_(ctx) {}
 
 int CmdSync::execute(int argc, char** argv) {
     bool historyMode = false;
+    bool forceHierarchical = false;
     for (int i = 2; i < argc; ++i) {
         if (std::string(argv[i]) == "--history") historyMode = true;
+        if (std::string(argv[i]) == "--force-hierarchical") forceHierarchical = true;
     }
 
     Codex& codex = *ctx_.storage;
@@ -136,11 +138,15 @@ int CmdSync::execute(int argc, char** argv) {
 
     bool hasUpdates = indexer.stats().nodesUpserted > 0;
 
-    if (ctx_.llm && ctx_.llm->isAvailable() && (hasUpdates || !contextExists)) {
+    if (ctx_.llm && ctx_.llm->isAvailable() && (hasUpdates || !contextExists || forceHierarchical)) {
         std::cout << "\n[ Hierarchical Context Ingestion ]\n";
         std::cout << "Profiling subsystems...\n";
         RepoProfiler profiler(ctx_.repoRoot);
         auto profiles = profiler.profile();
+        // Store dominant language as repo metadata for language-aware HyDE
+        std::string dominantLang = profiler.detectDominantLanguage();
+        codex.setRepoMetadata("dominant_language", dominantLang);
+        std::cout << "Detected dominant language: " << dominantLang << "\n";
         HierarchicalSummarizer summarizer(codex, *ctx_.llm);
         int contextNodes = summarizer.run(profiles);
         std::cout << "Wrote " << contextNodes << " context nodes ([CONTEXT:DIR:...] + [GLOBAL:REPO]).\n";

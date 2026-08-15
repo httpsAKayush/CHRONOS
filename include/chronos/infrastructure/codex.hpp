@@ -91,10 +91,20 @@ public:
 
     sqlite3* raw() { return db_; }
 
+    // Repo metadata for language detection and other repo-level settings
+    void setRepoMetadata(const std::string& key, const std::string& value) override;
+    std::optional<std::string> getRepoMetadata(const std::string& key) override;
+
+    // FTS5 lexical channel (Priority 4): exact-token search over node ids
+    // and file-path/symbol content.
+    void syncNodeFts(const std::string& nodeId, const std::string& content);
+    std::vector<std::string> ftsSearch(const std::string& query, int limit) override;
+
 private:
     void migrate();
     sqlite3* db_ = nullptr;
     std::string dbPath_;
+    std::string repoRoot_;
 };
 
 } // namespace chronos

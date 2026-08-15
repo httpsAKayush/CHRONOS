@@ -21,8 +21,10 @@
 #include <cstring>
 #include <csignal>
 #include <unistd.h>
-#include "chronos/ipc.hpp"
 #include "chronos/infrastructure/codex.hpp"
+#include "chronos/infrastructure/vector_index.hpp"
+#include "chronos/use_cases/ask_engine.hpp"
+#include "chronos/daemon/session_manager.hpp"
 #include "chronos/use_cases/oracle.hpp"
 #include "chronos/cli/cli_util.hpp"
 #include "chronos/env.hpp"
@@ -54,6 +56,10 @@ int main(int argc, char** argv) {
     auto llm = createLLMClient(config);
 
     Codex codex(repoRoot);
+    VectorIndex vectors(repoRoot);
+    SessionManager sessionManager(repoRoot);
+    AskEngine askEngine(codex, vectors, *llm, repoRoot, &sessionManager);
+
     Oracle oracle(codex, repoRoot);
     IpcServer server;
     std::string sockPath = socketPathForRepo(repoRoot);
@@ -112,13 +118,76 @@ int main(int argc, char** argv) {
             return;
         }
 
+        if (req.command == "ask_chat") {
+            // Run AskEngine in Daemon
+            auto askResult = askEngine.run(req.userQuery, req.sessionId);
+            if (!askResult.ok) {
+                ChronosResponseChunk chunk;
+                chunk.traceId = "";
+                chunk.textDelta = "[AskEngine Error] " + askResult.reason;
+                chunk.done = true;
+                send(chunk);
+                return;
+            }
+
+            std::string systemPrompt = kSystemPromptTemplate;
+            for (const auto& cn : askResult.request.context) {
+                if (cn.codeSnippet.find("[node:") == 0) {
+                    systemPrompt += "--- " + cn.codeSnippet + " ---\n\n";
+                } else {
+                    systemPrompt += "--- File: " + cn.filePath + " [node:" + cn.nodeId + "] ---\n";
+                    systemPrompt += cn.codeSnippet + "\n\n";
+                }
+            }
+
+            constexpr size_t kMaxSystemPromptChars = 48000;
+            if (systemPrompt.size() > kMaxSystemPromptChars) {
+                systemPrompt = systemPrompt.substr(0, kMaxSystemPromptChars) + "...\n[context truncated]";
+            }
+
+            // Fetch history from SessionManager
+            auto history = sessionManager.getHistory(req.sessionId);
+            
+            // Build messages payload
+            std::vector<ChatMessage> messages;
+            messages.push_back({"system", systemPrompt});
+            for (const auto& msg : history) {
+                messages.push_back(msg);
+            }
+            messages.push_back({"user", req.userQuery});
+
+            bool gotAnyText = false;
+            std::string assistantReply = "";
+            llm->streamChat(messages, 2048, [&](const std::string& chunkContent) {
+                gotAnyText = true;
+                assistantReply += chunkContent;
+                ChronosResponseChunk chunk;
+                chunk.traceId = askResult.request.traceId;
+                chunk.textDelta = chunkContent;
+                chunk.done = false;
+                send(chunk);
+            });
+
+            if (gotAnyText) {
+                sessionManager.addMessage(req.sessionId, "user", req.userQuery);
+                sessionManager.addMessage(req.sessionId, "assistant", assistantReply);
+            }
+
+            ChronosResponseChunk finalChunk;
+            finalChunk.traceId = askResult.request.traceId;
+            finalChunk.textDelta = "";
+            finalChunk.done = true;
+            send(finalChunk);
+            return;
+        }
+
         std::string systemPrompt = req.systemPromptOverride.empty() ? kSystemPromptTemplate : req.systemPromptOverride;
         for (const auto& cn : req.context) {
             systemPrompt += "--- File: " + cn.filePath + " [node:" + cn.nodeId + "] ---\n";
             systemPrompt += cn.codeSnippet + "\n\n";
         }
 
-        constexpr size_t kMaxSystemPromptChars = 12000;
+        constexpr size_t kMaxSystemPromptChars = 48000;
         if (systemPrompt.size() > kMaxSystemPromptChars) {
             systemPrompt = systemPrompt.substr(0, kMaxSystemPromptChars) + "...\n[context truncated]";
         }

@@ -69,6 +69,7 @@ std::string encodeRequest(const ChronosRequest& req) {
     std::ostringstream out;
     out << "{\"command\":\"" << jsonEscape(req.command) << "\","
         << "\"traceId\":\"" << jsonEscape(req.traceId) << "\","
+        << "\"sessionId\":\"" << jsonEscape(req.sessionId) << "\","
         << "\"userQuery\":\"" << jsonEscape(req.userQuery) << "\","
         << "\"systemPromptOverride\":\"" << jsonEscape(req.systemPromptOverride) << "\","
         << "\"requireCitations\":" << (req.requireCitations ? "true" : "false") << ","
@@ -90,6 +91,7 @@ ChronosRequest decodeRequest(const std::string& json) {
     req.command = extractStringField(json, "command");
     if (req.command.empty()) req.command = "ask";
     req.traceId = extractStringField(json, "traceId");
+    req.sessionId = extractStringField(json, "sessionId");
     req.userQuery = extractStringField(json, "userQuery");
     req.systemPromptOverride = extractStringField(json, "systemPromptOverride");
     req.requireCitations = extractBoolField(json, "requireCitations", true);

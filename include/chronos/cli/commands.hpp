@@ -38,6 +38,17 @@ private:
     const CliContext& ctx_;
 };
 
+class CmdChat : public ICommand {
+public:
+    explicit CmdChat(const CliContext& ctx);
+    int execute(int argc, char** argv) override;
+    std::string name() const override { return "chat"; }
+    std::string description() const override { return "Interactive stateful code-aware REPL"; }
+
+private:
+    const CliContext& ctx_;
+};
+
 class CmdExplain : public ICommand {
 public:
     explicit CmdExplain(const CliContext& ctx);

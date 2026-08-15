@@ -215,6 +215,27 @@ public:
         return std::nullopt;
     }
 
+    // --- Repo Metadata Operations ---
+    void setRepoMetadata(const std::string& key, const std::string& value) override {
+        repo_metadata_[key] = value;
+    }
+
+    std::optional<std::string> getRepoMetadata(const std::string& key) override {
+        auto it = repo_metadata_.find(key);
+        if (it != repo_metadata_.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
+    // --- FTS5 Lexical Search ---
+    std::vector<std::string> ftsSearch(const std::string& query, int limit) override {
+        // Simple mock: return empty for tests
+        (void)query;
+        (void)limit;
+        return {};
+    }
+
     // --- PPR / Graph Traversal ---
     TraceResult localPushPPR(const std::string& seedNodeId, int budget, double dampingFactor = 0.85) override {
         return localPushPPR(std::vector<std::string>{seedNodeId}, budget, dampingFactor);
@@ -308,6 +329,7 @@ private:
     std::unordered_map<std::string, std::string> alias_commits_;
     std::vector<FileImportRecord> file_imports_;
     std::unordered_map<std::string, TraceResult> traces_;
+    std::unordered_map<std::string, std::string> repo_metadata_;
     bool in_transaction_ = false;
 };
 

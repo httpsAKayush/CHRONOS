@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <sstream>
 #include <algorithm>
+#include <unordered_set>
+#include <fstream>
 
 
 namespace fs = std::filesystem;
@@ -12,7 +14,7 @@ namespace chronos {
 
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 6;
 
 void execOrThrow(sqlite3* db, const std::string& sql) {
     char* errMsg = nullptr;
@@ -25,10 +27,9 @@ void execOrThrow(sqlite3* db, const std::string& sql) {
 
 } // namespace
 
-Codex::Codex(const std::string& repoRoot) {
+Codex::Codex(const std::string& repoRoot) : dbPath_((fs::path(repoRoot) / ".chronos" / "codex.db").string()), repoRoot_(repoRoot) {
     fs::path chronosDir = fs::path(repoRoot) / ".chronos";
     fs::create_directories(chronosDir);
-    dbPath_ = (chronosDir / "codex.db").string();
 
     if (sqlite3_open(dbPath_.c_str(), &db_) != SQLITE_OK) {
         throw std::runtime_error("Failed to open Codex at " + dbPath_);
@@ -59,6 +60,11 @@ void Codex::migrate() {
         execOrThrow(db_, R"SQL(
             BEGIN;
 
+            CREATE TABLE IF NOT EXISTS repo_metadata (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS nodes (
                 id               TEXT PRIMARY KEY,
                 file_path        TEXT NOT NULL,
@@ -68,6 +74,7 @@ void Codex::migrate() {
                 is_active        INTEGER NOT NULL,
                 parse_confidence REAL NOT NULL,
                 ai_summary       TEXT,
+                signature        TEXT,
                 kind             TEXT NOT NULL DEFAULT 'code'
             );
 
@@ -81,6 +88,12 @@ void Codex::migrate() {
 
             CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file_path);
             CREATE INDEX IF NOT EXISTS idx_nodes_simhash ON nodes(simhash);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+                node_id UNINDEXED,
+                content,
+                tokenize = 'unicode61'
+            );
 
             CREATE TABLE IF NOT EXISTS edges (
                 source_id  TEXT NOT NULL REFERENCES nodes(id),
@@ -131,6 +144,14 @@ void Codex::migrate() {
             // ([CONTEXT:DIR:...], [GLOBAL:REPO]) live in the same table.
             sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN kind TEXT NOT NULL DEFAULT 'code';", nullptr, nullptr, nullptr);
         }
+        if (userVersion < 5) {
+            // Priority 4: FTS5 lexical channel.
+            sqlite3_exec(db_, "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(node_id UNINDEXED, content, tokenize = 'unicode61');", nullptr, nullptr, nullptr);
+        }
+        if (userVersion < 6) {
+            // Add signature column to nodes table.
+            sqlite3_exec(db_, "ALTER TABLE nodes ADD COLUMN signature TEXT;", nullptr, nullptr, nullptr);
+        }
     }
 
     execOrThrow(db_, "PRAGMA user_version = " + std::to_string(kSchemaVersion) + ";");
@@ -141,8 +162,8 @@ void Codex::upsertNode(const Node& n) {
         throw std::invalid_argument("byte_end must be strictly greater than byte_start");
     }
     static const char* sql = R"SQL(
-        INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        INSERT INTO nodes (id, file_path, byte_start, byte_end, simhash, is_active, parse_confidence, ai_summary, signature)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         ON CONFLICT(id) DO UPDATE SET
             file_path = excluded.file_path,
             byte_start = excluded.byte_start,
@@ -150,7 +171,8 @@ void Codex::upsertNode(const Node& n) {
             simhash = excluded.simhash,
             is_active = excluded.is_active,
             parse_confidence = excluded.parse_confidence,
-            ai_summary = excluded.ai_summary;
+            ai_summary = excluded.ai_summary,
+            signature = excluded.signature;
     )SQL";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -166,12 +188,34 @@ void Codex::upsertNode(const Node& n) {
     } else {
         sqlite3_bind_null(stmt, 8);
     }
+    if (!n.signature.empty()) {
+        sqlite3_bind_text(stmt, 9, n.signature.c_str(), -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 9);
+    }
     if (sqlite3_step(stmt) != SQLITE_DONE) {
         std::string err = sqlite3_errmsg(db_);
         sqlite3_finalize(stmt);
         throw std::runtime_error("upsertNode failed: " + err);
     }
     sqlite3_finalize(stmt);
+
+    // Keep FTS5 lexical index in sync (Priority 4). Content = file_path + " " +
+    // signature, plus the actual source code block so keyword searches work.
+    std::string ftsContent = n.file_path + " " + n.signature;
+    
+    std::string primaryPath = (fs::path(repoRoot_) / n.file_path).string();
+    std::ifstream in(primaryPath, std::ios::binary);
+    if (in) {
+        std::string snippet((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        int64_t start = std::max<int64_t>(0, n.byte_start);
+        int64_t end = std::min<int64_t>(snippet.size(), n.byte_end);
+        if (end > start) {
+            ftsContent += "\n" + snippet.substr(start, end - start);
+        }
+    }
+
+    syncNodeFts(n.id, ftsContent);
 }
 
 void Codex::upsertContextNode(const std::string& id, const std::string& filePath, const std::string& summary) {
@@ -781,6 +825,99 @@ void Codex::beginTransaction() {
 
 void Codex::commitTransaction() {
     sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, nullptr);
+}
+
+void Codex::setRepoMetadata(const std::string& key, const std::string& value) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, 
+        "INSERT INTO repo_metadata (key, value) VALUES (?1, ?2) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value;", 
+        -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, value.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+std::optional<std::string> Codex::getRepoMetadata(const std::string& key) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, "SELECT value FROM repo_metadata WHERE key = ?1;", -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+    std::optional<std::string> out;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        out = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+void Codex::syncNodeFts(const std::string& nodeId, const std::string& content) {
+    // Delete any prior FTS row, then insert fresh. Uses the node id as the
+    // external content key so updates stay idempotent.
+    sqlite3_stmt* del;
+    sqlite3_prepare_v2(db_, "DELETE FROM nodes_fts WHERE node_id = ?1;", -1, &del, nullptr);
+    sqlite3_bind_text(del, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(del);
+    sqlite3_finalize(del);
+
+    sqlite3_stmt* ins;
+    sqlite3_prepare_v2(db_, "INSERT INTO nodes_fts (node_id, content) VALUES (?1, ?2);", -1, &ins, nullptr);
+    sqlite3_bind_text(ins, 1, nodeId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 2, content.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(ins);
+    sqlite3_finalize(ins);
+}
+
+std::vector<std::string> Codex::ftsSearch(const std::string& query, int limit) {
+    std::vector<std::string> out;
+    if (query.empty()) return out;
+
+    // Build a targeted FTS query: prioritize symbols (must have alnum, not stopwords).
+    // FTS5 MATCH syntax: use NEAR for phrase proximity if applicable, or simply
+    // increase specificity by requiring at least one identifier match.
+    std::string ftsQuery;
+    std::istringstream iss(query);
+    std::string tok;
+    std::vector<std::string> symbols;
+    
+    const std::unordered_set<std::string> stopwords = {
+        "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is",
+        "are", "how", "what", "where", "why", "which", "does", "do", "used",
+        "use", "using", "with", "that", "this", "be", "can", "i", "you", "it"
+    };
+    
+    while (iss >> tok) {
+        std::string low = tok;
+        std::transform(low.begin(), low.end(), low.begin(), ::tolower);
+        bool isStop = stopwords.find(low) != stopwords.end();
+        bool hasAlnum = std::any_of(tok.begin(), tok.end(), ::isalnum);
+        
+        if (hasAlnum && !isStop) {
+            symbols.push_back(tok);
+        }
+    }
+    
+    for (const auto& s : symbols) printf("[FTS5 DEBUG] Token: %s\n", s.c_str());
+    
+    if (symbols.empty()) return out;
+
+    // Construct query: use OR but filter better.
+    ftsQuery = "";
+    for (size_t i = 0; i < symbols.size(); ++i) {
+        if (i > 0) ftsQuery += " OR ";
+        ftsQuery += "\"" + symbols[i] + "\"";
+    }
+
+    sqlite3_stmt* stmt;
+    std::string sql = "SELECT node_id FROM nodes_fts WHERE nodes_fts MATCH ?1 ORDER BY rank LIMIT ?2;";
+    sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, ftsQuery.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, limit);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        out.push_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+    }
+    sqlite3_finalize(stmt);
+    return out;
 }
 
 } // namespace chronos

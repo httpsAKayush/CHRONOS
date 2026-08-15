@@ -296,26 +296,37 @@ std::vector<SeedMatch> VectorIndex::search(const std::vector<float>& queryVector
     const double alpha = getEnvDouble("CHRONOS_RECENCY_ALPHA", 0.7, 0.0, 1.0);
     const double lambda = getEnvDouble("CHRONOS_RECENCY_LAMBDA", 1e-7, 0.0, -1.0);
     
+    // Collect raw (label, dist) before temporal re-scoring so we can apply
+    // the dynamic distance threshold (Priority 8).
+    struct RawHit { hnswlib::labeltype label; float dist; };
+    std::vector<RawHit> rawHits;
     while (!result_queue.empty()) {
         auto top = result_queue.top();
         result_queue.pop();
-        
         hnswlib::labeltype label = top.second;
         if (impl_->label_to_id.count(label) == 0) continue;
-        
-        float dist = top.first;
-        // Convert L2 squared distance roughly to cosine similarity (if normalized vectors)
+        rawHits.push_back({label, top.first});
+    }
+    if (rawHits.empty()) return results;
+
+    // Dynamic distance thresholding (Priority 8):
+    // Keep any hit within <= 30% of the #1 (nearest) distance, plus a small
+    // absolute outlier cap so a single far outlier can't drag the cutoff up.
+    float bestDist = rawHits.front().dist;            // already nearest-first
+    float outlierCap = getEnvDouble("CHRONOS_OUTLIER_CAP", 0.6, 0.0, 1.0);
+    float dynamicCutoff = bestDist + (bestDist * 0.3f);
+    if (dynamicCutoff < outlierCap) dynamicCutoff = outlierCap;
+
+    for (const auto& h : rawHits) {
+        if (h.dist > dynamicCutoff) break; // rawHits is sorted ascending by dist
+        float dist = h.dist;
         float cos_sim = 1.0f - (dist / 2.0f);
-        
-        int64_t commit_ts = impl_->timestamps[label];
+        int64_t commit_ts = impl_->timestamps[h.label];
         double deltaT = (commit_ts > 0 && queryTimestamp > commit_ts)
                             ? static_cast<double>(queryTimestamp - commit_ts)
                             : 0.0;
-        
-        // Exponential temporal decay formula
         float final_score = static_cast<float>((alpha * cos_sim) + ((1.0 - alpha) * std::exp(-lambda * deltaT)));
-        
-        results.push_back({impl_->label_to_id[label], final_score});
+        results.push_back({impl_->label_to_id[h.label], final_score});
     }
     
     std::sort(results.begin(), results.end(), [](const SeedMatch& a, const SeedMatch& b) {

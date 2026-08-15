@@ -105,6 +105,12 @@ bool OllamaClient::stream(const std::string& systemPrompt,
                           const std::string& userQuery,
                           int maxTokens,
                           const std::function<void(const std::string&)>& onChunk) {
+    return streamChat({{"system", systemPrompt}, {"user", userQuery}}, maxTokens, onChunk);
+}
+
+bool OllamaClient::streamChat(const std::vector<ChatMessage>& msg_history,
+                              int maxTokens,
+                              const std::function<void(const std::string&)>& onChunk) {
     httplib::Client cli(host_, port_);
     cli.set_connection_timeout(5, 0);
     cli.set_read_timeout(30, 0);
@@ -116,10 +122,11 @@ bool OllamaClient::stream(const std::string& systemPrompt,
         body["max_tokens"] = maxTokens;
         body["stream"] = true;
         body["messages"] = nlohmann::json::array();
-        if (!systemPrompt.empty()) {
-            body["messages"].push_back({{"role", "system"}, {"content", systemPrompt}});
+        for (const auto& msg : msg_history) {
+            if (!msg.content.empty()) {
+                body["messages"].push_back({{"role", msg.role}, {"content", msg.content}});
+            }
         }
-        body["messages"].push_back({{"role", "user"}, {"content", userQuery}});
 
         httplib::Request req;
         req.method = "POST";
@@ -182,10 +189,11 @@ bool OllamaClient::stream(const std::string& systemPrompt,
     body["model"] = model_;
     body["stream"] = true;
     nlohmann::json messages = nlohmann::json::array();
-    if (!systemPrompt.empty()) {
-        messages.push_back({{"role", "system"}, {"content", systemPrompt}});
+    for (const auto& msg : msg_history) {
+        if (!msg.content.empty()) {
+            messages.push_back({{"role", msg.role}, {"content", msg.content}});
+        }
     }
-    messages.push_back({{"role", "user"}, {"content", userQuery}});
     body["messages"] = messages;
 
     httplib::Request req;

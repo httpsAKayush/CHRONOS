@@ -31,6 +31,11 @@ public:
     // Root documentation gathered at repo root (README.md, CMakeLists.txt,
     // package.json, pyproject.toml, etc.), capped in size.
     std::vector<std::string> rootDocs() const;
+    
+    // Detects the dominant programming language in the repo by counting
+    // file extensions across all non-vendor source files. Returns a canonical
+    // language identifier: "python", "cpp", "typescript", "rust", "go", etc.
+    std::string detectDominantLanguage() const;
 
 private:
     std::string repoRoot_;
