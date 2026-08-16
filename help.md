@@ -39,15 +39,13 @@ FIRST-TIME SETUP (Recommended Sequence)
 ──────────────────────────────────────────────────────────────────────────────
 
 # 1. BUILD & INSTALL
-    # Clone the repository and compile using CMake:
+    # Clone the repository and install locally (no sudo required!):
     git clone -b res https://github.com/httpsAKayush/CHRONOS.git
     cd CHRONOS && mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
-
-    # Best practice: Symlink to your local bin instead of global install
-    mkdir -p ~/.local/bin
-    ln -s $(pwd)/chronos ~/.local/bin/chronos
-    # (Ensure ~/.local/bin is in your PATH)
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=~/.local
+    make -j$(nproc) && make install
+    # This safely installs chronos to ~/.local/bin, meaning you can
+    # safely rename or move the CHRONOS source folder later!
 
 # 2. CONFIGURE LLM (Local or Cloud)
     # The default provider is 'auto' (Cloud first, local fallback).

@@ -98,15 +98,13 @@ void printHelp() {
 @BL@──────────────────────────────────────────────────────────────────────────────@RE@
 
 @YL@# 1. BUILD & INSTALL@RE@
-    @DI@# Clone the repository and compile using CMake:@RE@
+    @DI@# Clone the repository and install locally (no sudo required!):@RE@
     @GR@git clone -b res https://github.com/httpsAKayush/CHRONOS.git@RE@
     @GR@cd CHRONOS && mkdir build && cd build@RE@
-    @GR@cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)@RE@
-
-    @DI@# Best practice: Symlink to your local bin instead of global install@RE@
-    @GR@mkdir -p ~/.local/bin@RE@
-    @GR@ln -s $(pwd)/chronos ~/.local/bin/chronos@RE@
-    @DI@# (Ensure ~/.local/bin is in your PATH)@RE@
+    @GR@cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=~/.local@RE@
+    @GR@make -j$(nproc) && make install@RE@
+    @DI@# This safely installs chronos to ~/.local/bin, meaning you can@RE@
+    @DI@# safely rename or move the CHRONOS source folder later!@RE@
 
 @YL@# 2. CONFIGURE LLM (Local or Cloud)@RE@
     @DI@# The default provider is 'auto' (Cloud first, local fallback).@RE@
