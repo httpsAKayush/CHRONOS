@@ -40,6 +40,7 @@ struct ChronosResponseChunk {
     std::string textDelta;
     bool done = false;
     bool unverifiedCitation = false;  // set by daemon if a citation check fails
+    bool isStatus = false;
 };
 
 std::string encodeRequest(const ChronosRequest& req);

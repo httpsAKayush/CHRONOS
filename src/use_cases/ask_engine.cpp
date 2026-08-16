@@ -471,7 +471,7 @@ ChronosRequest AskEngine::synthesize(const std::vector<SeedMatch>& seeds,
 }
 
 // ── Public entry point ──────────────────────────────────────────────────
-AskResult AskEngine::run(const std::string& query, const std::string& sessionId) {
+AskResult AskEngine::run(const std::string& query, const std::string& sessionId, std::function<void(const std::string&)> statusCallback) {
     AskResult result;
     result.usedHyDE = false;
 
@@ -484,6 +484,7 @@ AskResult AskEngine::run(const std::string& query, const std::string& sessionId)
 
         auto history = sessionManager_->getHistory(sessionId);
         if (!history.empty()) {
+            if (statusCallback) statusCallback("Rewriting query using history...");
             std::cout << "[Chat] Rewriting query using conversation history...\n";
             std::string historyStr = "--- CONVERSATION HISTORY ---\n";
             for (const auto& msg : history) {
@@ -500,6 +501,7 @@ AskResult AskEngine::run(const std::string& query, const std::string& sessionId)
     }
 
     // Step 1: Subsystem pre-fetch (BEFORE HyDE per architecture order)
+    if (statusCallback) statusCallback("Fetching architectural context...");
     std::string repoSummary = fetchRepoSummary();
     if (!repoSummary.empty()) {
         std::cout << "[HyDE] Fetched [GLOBAL:REPO] context (" << repoSummary.size() << " chars).\n";
@@ -515,6 +517,7 @@ AskResult AskEngine::run(const std::string& query, const std::string& sessionId)
     // Step 2: Generate hypothetical (language-aware, fed by pre-fetched context)
     std::string hypothetical;
     if (llm_.isAvailable()) {
+        if (statusCallback) statusCallback("Generating HyDE structural assumption...");
         std::cout << "[HyDE] Generating " << language << "-aware hypothetical response...\n";
         hypothetical = generateHypothetical(repoSummary, query, language);
     }
@@ -522,6 +525,7 @@ AskResult AskEngine::run(const std::string& query, const std::string& sessionId)
     std::vector<SeedMatch> seeds;
     if (!hypothetical.empty()) {
         result.usedHyDE = true;
+        if (statusCallback) statusCallback("Running vector search...");
         std::cout << "[HyDE] Targeted vector search with " << hypothetical.size() << "-char hypothetical.\n";
 
         // Step 3: Targeted search (HyDE + raw query hybrid)
@@ -540,13 +544,12 @@ AskResult AskEngine::run(const std::string& query, const std::string& sessionId)
         return result;
     }
 
-    // Step 3b: Structural Graph Expansion — boost nodes from explicitly named
-    // files/symbols so they always appear at the top of the context window,
-    // overriding the semantic similarity penalty that causes documentation to
-    // outrank actual code.
+    // Step 3b: Structural Graph Expansion
+    if (statusCallback) statusCallback("Expanding via structural graph...");
     seeds = structuralExpand(query, seeds);
 
     // Step 4: Final synthesis payload
+    if (statusCallback) statusCallback("Synthesizing context payload...");
     auto req = synthesize(seeds, activeQuery, traceId, sessionId);
 
     // Capture raw trace

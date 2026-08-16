@@ -1,59 +1,27 @@
-// chronos: the Querier CLI/TUI (Spec §5 Interaction Model). Deliberately a
-// CLI, not an IDE plugin (Spec §2 non-goal), to keep zero coupling with
-// heavy IDE environments.
-//
-// Hexagonal Architecture: this file is the composition root. It performs
-// Dependency Injection — building the adapters (Config, Codex storage,
-// VectorIndex, ILLMClient) once and wiring them into the Command objects.
-// No business logic lives here; each subcommand is dispatched to a
-// dedicated ICommand implementation.
-//
-// Subcommands:
-//   chronos init                 -- create .chronos/, add to .gitignore, install git hook
-//   chronos ask "<query>"        -- HyDE + Structural Graph Expansion + FTS5 Frequency Boost
-//   chronos explain <target>     -- 5-tier cross-linked explain: file / file::fn / file::Class / symbol
-//   chronos trace <traceId>      -- Spec §9 Observability: replay which nodes backed an answer
-//   chronos sync                 -- Spec §11 mitigation: repair Codex state if hooks were bypassed
+import re
 
-#include <filesystem>
-#include <iostream>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
+with open('src/cli/main_cli.cpp', 'r') as f:
+    content = f.read()
 
-#include "chronos/cli/commands.hpp"
-#include "chronos/cli/cli_context.hpp"
-#include "chronos/env.hpp"
-#include "chronos/infrastructure/config.hpp"
-#include "chronos/infrastructure/codex.hpp"
-#include "chronos/infrastructure/vector_index.hpp"
-#include "chronos/infrastructure/llm/llm_client_factory.hpp"
-
-namespace fs = std::filesystem;
-using namespace chronos;
-
-namespace {
-
-void printColoredHelp(const std::string& text) {
+new_help = r'''void printColoredHelp(const std::string& text) {
     std::string out;
     for (size_t i = 0; i < text.size(); ++i) {
         if (text[i] == '@' && i + 3 < text.size() && text[i+3] == '@') {
             std::string tag = text.substr(i+1, 2);
-            if (tag == "CY") { out += "[1;36m"; i+=3; }
-            else if (tag == "MG") { out += "[1;35m"; i+=3; }
-            else if (tag == "YL") { out += "[1;33m"; i+=3; }
-            else if (tag == "GR") { out += "[1;32m"; i+=3; }
-            else if (tag == "BL") { out += "[1;34m"; i+=3; }
-            else if (tag == "RE") { out += "[0m"; i+=3; }
-            else if (tag == "BO") { out += "[1;37m"; i+=3; }
-            else if (tag == "DI") { out += "[3;90m"; i+=3; }
+            if (tag == "CY") { out += "\033[1;36m"; i+=3; }
+            else if (tag == "MG") { out += "\033[1;35m"; i+=3; }
+            else if (tag == "YL") { out += "\033[1;33m"; i+=3; }
+            else if (tag == "GR") { out += "\033[1;32m"; i+=3; }
+            else if (tag == "BL") { out += "\033[1;34m"; i+=3; }
+            else if (tag == "RE") { out += "\033[0m"; i+=3; }
+            else if (tag == "BO") { out += "\033[1;37m"; i+=3; }
+            else if (tag == "DI") { out += "\033[3;90m"; i+=3; }
             else out += text[i];
         } else {
             out += text[i];
         }
     }
-    std::cout << out << "[0m";
+    std::cout << out << "\033[0m";
 }
 
 void printHelp() {
@@ -99,7 +67,7 @@ void printHelp() {
 
 @YL@# 1. BUILD & INSTALL@RE@
     @DI@# Clone the repository and compile using CMake:@RE@
-    @GR@git clone -b res https://github.com/httpsAKayush/CHRONOS.git@RE@
+    @GR@git clone https://github.com/httpsAKayush/CHRONOS.git@RE@
     @GR@cd CHRONOS && mkdir build && cd build@RE@
     @GR@cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)@RE@
 
@@ -163,58 +131,15 @@ void printHelp() {
 @BL@──────────────────────────────────────────────────────────────────────────────@RE@
 @DI@Run `chronos <command> --help` for specific command options.@RE@
 )");
-}
+}'''
 
-} // namespace
+# Replace the existing printHelp() implementation
+# Find the start of void printHelp() {
+# and the end of the namespace anon block
+pattern = re.compile(r'void printHelp\(\) \{.*?\n\}', re.DOTALL)
+content = pattern.sub(new_help, content)
 
-int main(int argc, char** argv) {
-    if (argc < 2 || std::string(argv[1]) == "help" || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
-        printHelp();
-        return (argc < 2) ? 2 : 0;
-    }
-    std::string cmd = argv[1];
-    std::string repoRoot = fs::current_path().string();
+with open('src/cli/main_cli.cpp', 'w') as f:
+    f.write(content)
 
-    auto env = loadEnv(repoRoot);
-    for (const auto& [k, v] : env) {
-        setenv(k.c_str(), v.c_str(), 1);
-    }
-
-    Config globalConfig;
-
-    auto llm = createLLMClient(globalConfig);
-
-    CliContext ctx{
-        .repoRoot = repoRoot,
-        .config = std::make_shared<Config>(globalConfig),
-        .storage = std::make_shared<Codex>(repoRoot),
-        .vectors = std::make_shared<VectorIndex>(repoRoot),
-        .llm = std::move(llm)
-    };
-
-    std::unordered_map<std::string, std::unique_ptr<ICommand>> commands;
-    commands["init"] = std::make_unique<CmdInit>(ctx);
-    commands["sync"] = std::make_unique<CmdSync>(ctx);
-    commands["ask"] = std::make_unique<CmdAsk>(ctx);
-    commands["chat"] = std::make_unique<CmdChat>(ctx);
-    commands["explain"] = std::make_unique<CmdExplain>(ctx);
-    commands["map"] = std::make_unique<CmdMap>(ctx);
-    commands["diagnose"] = std::make_unique<CmdDiagnose>(ctx);
-    commands["trace"] = std::make_unique<CmdTrace>(ctx);
-    commands["timeline"] = std::make_unique<CmdTimeline>(ctx);
-    commands["check-staging"] = std::make_unique<CmdCheckStaging>(ctx);
-    commands["status"] = std::make_unique<CmdStatus>(ctx);
-    commands["config"] = std::make_unique<CmdConfig>(ctx);
-    commands["export"] = std::make_unique<CmdExport>(ctx);
-    commands["clean"] = std::make_unique<CmdClean>(ctx);
-    commands["commit"] = std::make_unique<CmdCommit>(ctx);
-
-    auto it = commands.find(cmd);
-    if (it == commands.end()) {
-        std::cerr << "Unknown command: " << cmd << "\n";
-        printHelp();
-        return 1;
-    }
-
-    return it->second->execute(argc, argv);
-}
+print("Help text updated.")

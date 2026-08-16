@@ -9,8 +9,152 @@
 #include <thread>
 #include <chrono>
 #include <sqlite3.h>
+#include <atomic>
+#include <mutex>
+#include "chronos/daemon/session_manager.hpp"
 
 namespace chronos {
+
+class ANSIStreamFormatter {
+    bool inBold = false;
+    bool inCode = false;
+    bool inBlock = false;
+    int backtickCount = 0;
+    int starCount = 0;
+    std::string citationBuf;
+    bool inCitation = false;
+    
+    bool isLineStart = true;
+    bool inHeader = false;
+    bool potentialList = false;
+public:
+    void print(const std::string& chunk) {
+        for (char c : chunk) {
+            // Newline resets line-level formatting
+            if (c == '\n') {
+                if (inHeader) {
+                    std::cout << "\033[0m";
+                    inHeader = false;
+                }
+                std::cout << c;
+                isLineStart = true;
+                potentialList = false;
+                continue;
+            }
+
+            if (isLineStart && c == '#') {
+                inHeader = true;
+                std::cout << "\033[1;35m#"; // Magenta
+                isLineStart = false;
+                continue;
+            }
+            if (inHeader && c == '#') {
+                std::cout << c;
+                continue;
+            }
+
+            if (isLineStart && c == '-') {
+                potentialList = true;
+                isLineStart = false;
+                std::cout << "\033[1;34m-"; // Blue
+                continue;
+            }
+            if (isLineStart && c == '>') {
+                potentialList = true;
+                isLineStart = false;
+                std::cout << "\033[1;32m>"; // Green
+                continue;
+            }
+
+            if (potentialList) {
+                if (c == ' ') {
+                    std::cout << " \033[0m"; 
+                    if (inHeader) std::cout << "\033[1;35m";
+                } else {
+                    std::cout << "\033[0m" << c; 
+                }
+                potentialList = false;
+                continue;
+            }
+
+            if (c != ' ') {
+                isLineStart = false;
+            }
+
+            if (inCitation) {
+                if (c == ']') {
+                    inCitation = false;
+                }
+                // Swallow all characters inside the citation
+                continue;
+            } else if (c == '[') {
+                if (!citationBuf.empty()) std::cout << citationBuf;
+                citationBuf = "[";
+                continue;
+            } else if (!citationBuf.empty()) {
+                citationBuf += c;
+                if (citationBuf == "[node:") {
+                    // Swallow the citation prefix
+                    citationBuf.clear();
+                    inCitation = true;
+                    continue;
+                } else if (std::string("[node:").find(citationBuf) != 0) {
+                    std::cout << citationBuf.substr(0, citationBuf.size() - 1);
+                    citationBuf.clear();
+                } else {
+                    continue;
+                }
+            }
+
+            if (c == '*') {
+                starCount++;
+                if (starCount == 2) {
+                    inBold = !inBold;
+                    if (inBold) std::cout << "\033[1;37m**";
+                    else std::cout << "**\033[0m";
+                    starCount = 0;
+                }
+                continue;
+            } else if (starCount > 0) {
+                std::cout << "*";
+                starCount = 0;
+            }
+
+            if (c == '`') {
+                backtickCount++;
+                if (backtickCount == 3) {
+                    inBlock = !inBlock;
+                    if (inBlock) std::cout << "\n\033[38;5;38m```";
+                    else std::cout << "```\033[0m";
+                    backtickCount = 0;
+                }
+                continue;
+            } else if (backtickCount > 0) {
+                if (backtickCount == 1 && !inBlock) {
+                    inCode = !inCode;
+                    if (inCode) std::cout << "\033[38;5;158m`";
+                    else std::cout << "`\033[0m";
+                } else if (backtickCount == 2) {
+                    std::cout << "``";
+                }
+                backtickCount = 0;
+            }
+
+            std::cout << c;
+        }
+    }
+    void finish() {
+        if (!citationBuf.empty()) std::cout << citationBuf;
+        if (starCount > 0) std::cout << std::string(starCount, '*');
+        if (backtickCount > 0) std::cout << std::string(backtickCount, '`');
+        std::cout << "\033[0m" << std::flush;
+        inBold = inCode = inBlock = inCitation = false;
+        inHeader = potentialList = false;
+        isLineStart = true;
+        starCount = backtickCount = 0;
+        citationBuf.clear();
+    }
+};
 
 namespace {
     std::string generateUUID() {
@@ -41,11 +185,22 @@ CmdChat::CmdChat(const CliContext& ctx) : ctx_(ctx) {}
 int CmdChat::execute(int argc, char** argv) {
     std::string sessionId = "";
     bool listMode = false;
+    std::string deleteSessionId = "";
+    bool deleteAllMode = false;
+    bool noHistory = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--list" || arg == "-l") {
             listMode = true;
+        } else if (arg == "--no-history") {
+            noHistory = true;
+        } else if (arg == "--delete-all") {
+            deleteAllMode = true;
+        } else if (arg == "--delete" && i + 1 < argc) {
+            deleteSessionId = argv[++i];
+        } else if (arg.rfind("--delete=", 0) == 0) {
+            deleteSessionId = arg.substr(9);
         } else if (arg == "--session" && i + 1 < argc) {
             sessionId = argv[++i];
         } else if (arg.rfind("--session=", 0) == 0) {
@@ -54,6 +209,42 @@ int CmdChat::execute(int argc, char** argv) {
     }
 
     std::string dbPath = (std::filesystem::path(ctx_.repoRoot) / ".chronos" / "session.db").string();
+
+    if (deleteAllMode) {
+        sqlite3* db;
+        if (sqlite3_open(dbPath.c_str(), &db) == SQLITE_OK) {
+            sqlite3_exec(db, "DELETE FROM chat_history; DELETE FROM working_set; DELETE FROM state;", nullptr, nullptr, nullptr);
+            sqlite3_close(db);
+            std::cout << "[Chronos] All chat sessions deleted.\n";
+        } else {
+            std::cerr << "[!] Could not read session database.\n";
+            return 1;
+        }
+        return 0;
+    }
+
+    if (!deleteSessionId.empty()) {
+        sqlite3* db;
+        if (sqlite3_open(dbPath.c_str(), &db) == SQLITE_OK) {
+            auto del = [&](const char* sql) {
+                sqlite3_stmt* stmt;
+                if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(stmt, 1, deleteSessionId.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_step(stmt);
+                    sqlite3_finalize(stmt);
+                }
+            };
+            del("DELETE FROM chat_history WHERE session_id = ?1;");
+            del("DELETE FROM working_set WHERE session_id = ?1;");
+            del("DELETE FROM state WHERE session_id = ?1;");
+            sqlite3_close(db);
+            std::cout << "[Chronos] Session '" << deleteSessionId << "' deleted.\n";
+        } else {
+            std::cerr << "[!] Could not read session database.\n";
+            return 1;
+        }
+        return 0;
+    }
 
     if (listMode) {
         sqlite3* db;
@@ -102,14 +293,38 @@ int CmdChat::execute(int argc, char** argv) {
 
     std::string repoName = std::filesystem::path(ctx_.repoRoot).filename().string();
 
-    std::cout << "[Chronos] Interactive session started (repo: " << repoName << ")\n";
-    std::cout << "[Chronos] Session ID: " << sessionId << "\n";
-    std::cout << "[Chronos] Type /exit to quit.\n\n";
+    std::cout << "\033[1;34m[Chronos]\033[0m Interactive session started (repo: \033[1;37m" << repoName << "\033[0m)\n";
+    std::cout << "\033[1;34m[Chronos]\033[0m Session ID: \033[36m" << sessionId << "\033[0m\n";
+    std::cout << "\033[1;34m[Chronos]\033[0m Type \033[1;35m/exit\033[0m to quit.\n\n";
 
     linenoiseHistorySetMaxLen(100);
+    linenoiseSetMultiLine(1);
+
+    ANSIStreamFormatter formatter;
+
+    {
+        SessionManager sm(ctx_.repoRoot);
+        auto history = sm.getHistory(sessionId);
+        if (!noHistory) {
+            for (const auto& msg : history) {
+                if (msg.role == "user") {
+                    std::cout << "\033[1;32m>\033[1;36m " << msg.content << "\033[0m\n";
+                } else {
+                    formatter.print(msg.content);
+                    formatter.finish();
+                    std::cout << "\n\n";
+                }
+            }
+        }
+    }
 
     while (true) {
-        char* raw_line = linenoise("> ");
+        // \033[1;36m (Cyan) at the end of the prompt leaves the terminal 
+        // in a cyan state, making the user's typed input cyan!
+        char* raw_line = linenoise("\033[1;32m>\033[1;36m ");
+        
+        // Immediately reset the terminal color when they hit Enter
+        std::cout << "\033[0m";
         if (!raw_line) {
             break;
         }
@@ -145,9 +360,47 @@ int CmdChat::execute(int argc, char** argv) {
             continue;
         }
 
-        bool streamOk = client.sendAndStream(req, [](const ChronosResponseChunk& chunk) {
-            std::cout << chunk.textDelta << std::flush;
+        std::atomic<bool> spinnerActive{true};
+        std::string currentStatus = "Thinking...";
+        std::mutex statusMutex;
+        std::thread spinnerThread([&spinnerActive, &currentStatus, &statusMutex]() {
+            const char* spinner = "-\\|/";
+            int i = 0;
+            while (spinnerActive) {
+                std::string status;
+                {
+                    std::lock_guard<std::mutex> lock(statusMutex);
+                    status = currentStatus;
+                }
+                std::cout << "\r\033[K\033[1;36m" << spinner[i % 4] << "\033[0m \033[3;90m" << status << "\033[0m" << std::flush;
+                i++;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         });
+
+        bool firstChunk = true;
+        bool streamOk = client.sendAndStream(req, [&](const ChronosResponseChunk& chunk) {
+            if (chunk.isStatus) {
+                std::lock_guard<std::mutex> lock(statusMutex);
+                currentStatus = chunk.textDelta;
+                return;
+            }
+            if (firstChunk) {
+                spinnerActive = false;
+                spinnerThread.join();
+                std::cout << "\r\033[K" << std::flush;
+                firstChunk = false;
+            }
+            formatter.print(chunk.textDelta);
+        });
+
+        if (firstChunk) {
+            spinnerActive = false;
+            spinnerThread.join();
+            std::cout << "\r\033[K" << std::flush;
+        }
+
+        formatter.finish();
 
         if (!streamOk) {
             std::cerr << "\n[!] Daemon unreachable or failed during stream.\n";

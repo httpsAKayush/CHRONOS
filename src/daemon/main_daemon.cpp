@@ -120,7 +120,14 @@ int main(int argc, char** argv) {
 
         if (req.command == "ask_chat") {
             // Run AskEngine in Daemon
-            auto askResult = askEngine.run(req.userQuery, req.sessionId);
+            auto askResult = askEngine.run(req.userQuery, req.sessionId, [&](const std::string& status) {
+                ChronosResponseChunk chunk;
+                chunk.traceId = req.traceId;
+                chunk.textDelta = status;
+                chunk.done = false;
+                chunk.isStatus = true;
+                send(chunk);
+            });
             if (!askResult.ok) {
                 ChronosResponseChunk chunk;
                 chunk.traceId = "";

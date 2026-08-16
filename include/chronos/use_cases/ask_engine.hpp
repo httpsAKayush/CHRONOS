@@ -44,7 +44,7 @@ public:
     AskEngine(IStorage& storage, VectorIndex& vectors, ILLMClient& llm,
               const std::string& repoRoot, SessionManager* sessionManager = nullptr);
 
-    AskResult run(const std::string& query, const std::string& sessionId = "");
+    AskResult run(const std::string& query, const std::string& sessionId = "", std::function<void(const std::string&)> statusCallback = nullptr);
 
 private:
     IStorage& storage_;

@@ -1,3 +1,4 @@
+```text
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  Chronos — The Temporal Codebase Engine                                      │
 │  Understand any codebase. Ask questions. Get precise, cited answers.         │
@@ -8,38 +9,23 @@ USAGE
 
 CORE COMMANDS
     init                 Initialize .chronos/ in current repo, install git hook
-                         Dot-folders (.agent, .planning, .vscode, etc.) are auto-skipped
+                         Dot-folders (.agent, .vscode) are auto-skipped.
     sync                 Index codebase → parse ASTs → build graph & vector index
-    ask "question"       Conceptual questions with Structural Graph Expansion (Discovery Mode)
+    ask "question"       Conceptual questions with Structural Graph Expansion
                          chronos ask "where is the connection pooler configured?"
-                         chronos ask "how does learn() persist state?"
-                         chronos ask "what is phase 3 and who calls it?"
-    explain <target>     Cross-linked deep-dive into a file, class, or function (Surgery Mode)
-                         -- Whole file:
-                         chronos explain agent/decision.py
-                         chronos explain serve/tcp_server.py --query "what port does this bind to?"
-                         -- Specific function (follows CALLS edges into other files):
-                         chronos explain agent/decision.py::learn
-                         chronos explain agent/decision.py::learn --query "how does it persist state?"
-                         -- Specific class (pulls all methods + cross-links):
+    chat                 Start an interactive stateful Code-Aware REPL session
+                         chronos chat --list                 # View past sessions
+                         chronos chat --session <id>         # Resume a session
+                         chronos chat --session <id> --no-history # Start fresh screen
+    explain <target>     Cross-linked deep-dive into a file, class, or function
+                         chronos explain serve/tcp_server.py
                          chronos explain agent/decision.py::QLearningDecision
-                         -- Bare symbol name (resolves across the whole repo):
-                         chronos explain QLearningDecision
                          chronos explain initialize_multicast
     map <symbol>         Architectural X-Ray — upstream/downstream call graph
-                         chronos map initialize_multicast --downstream
-                         chronos map initialize_multicast --upstream
                          chronos map initialize_multicast --both --depth 3
-    diagnose --trace <log>  Ghost Bug Diagnosis — walk backward from stack trace
+    diagnose             Ghost Bug Diagnosis — walk backward from stack trace
                          chronos diagnose --trace crash.log --top 5
-    trace <traceId>      Inspect exact context graph LLM was given for a trace ID
-                         chronos trace crash-a116c6e0
-    timeline <path>      History of structural mutations for file/symbol
-                         chronos timeline serve/tcp_server.py
-    check-staging        Prevent "Temporal Collisions" before committing
-                         chronos check-staging --strict
     commit               AI commit message for staged changes (Conventional Commits)
-                         chronos commit
                          chronos commit --all --amend
 
 SYSTEM MANAGEMENT
@@ -49,241 +35,72 @@ SYSTEM MANAGEMENT
     clean                Destroy local index, free disk space
 
 ──────────────────────────────────────────────────────────────────────────────
-FIRST-TIME SETUP (copy-paste this sequence)
+FIRST-TIME SETUP (Recommended Sequence)
 ──────────────────────────────────────────────────────────────────────────────
 
-# 1. INSTALL DEPENDENCIES
-    # Ubuntu/Debian:
-    sudo apt update && sudo apt install -y \
-        cmake g++ git sqlite3 libsqlite3-dev \
-        libtree-sitter-dev tree-sitter \
-        python3 python3-pip
-
-    # Arch/Manjaro:
-    sudo pacman -S cmake gcc git sqlite tree-sitter python python-pip
-
-    # Fedora:
-    sudo dnf install cmake gcc-c++ git sqlite-devel tree-sitter python3 python3-pip
-
-    # macOS (Homebrew):
-    brew install cmake git sqlite tree-sitter python
-
-    # tree-sitter grammars for your languages (C++, Python, etc.):
-    pip install --break-system-packages tree-sitter-cpp tree-sitter-python \
-        tree-sitter-javascript tree-sitter-css
-
-# 2. BUILD & INSTALL
+# 1. BUILD & INSTALL
+    # Clone the repository and compile using CMake:
     git clone -b res https://github.com/httpsAKayush/CHRONOS.git
-    cd CHRONOS
-    mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j$(nproc)
-    sudo make install
-    # This installs: /usr/local/bin/chronos  /usr/local/lib/libchronos_core.so
+    cd CHRONOS && mkdir build && cd build
+    cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+
+    # Best practice: Symlink to your local bin instead of global install
+    mkdir -p ~/.local/bin
+    ln -s $(pwd)/chronos ~/.local/bin/chronos
+    # (Ensure ~/.local/bin is in your PATH)
+
+# 2. CONFIGURE LLM (Local or Cloud)
+    # The default provider is 'auto' (Cloud first, local fallback).
+
+    # ── LOCAL (Ollama, offline, fast) ────────────────────────────────
+    chronos config set llm.local.url http://localhost:11434
+    chronos config set llm.local.model llama3.1:8b
+
+    # ── CLOUD (OpenAI / OpenRouter / NVIDIA) ─────────────────────────
+    chronos config set llm.cloud.url https://api.openai.com/v1
+    chronos config set llm.cloud.key sk-...
+    chronos config set llm.cloud.model gpt-4o
 
 # 3. INITIALIZE IN YOUR PROJECT
     cd /path/to/your/project
     chronos init
     # Creates .chronos/, adds to .gitignore, installs pre-commit hook
-    # Note: dot-folders (.agent, .planning, .vscode, .git, etc.) are
-    # automatically skipped during indexing.
 
-# 4. CONFIGURE LLM (choose ONE profile)
-    # ── LOCAL (Ollama, free, offline, fast) ──────────────────────────────────────────
-    # Install Ollama first: https://ollama.com
-    curl -fsSL https://ollama.com/install.sh | sh
-    ollama pull llama3.1:8b   # or mistral, codellama, etc.
-
-    chronos config set llm.provider auto
-    chronos config set llm.local.url http://localhost:11434
-    chronos config set llm.local.key ollama
-    chronos config set llm.local.model llama3.1:8b
-
-    # ── CLOUD (NVIDIA / OpenRouter / OpenAI) ──────────────────────────────────
-    # Get API key from: https://platform.openai.com  or  https://openrouter.ai  or  https://build.nvidia.com
-    chronos config set llm.provider auto
-    chronos config set llm.cloud.url https://api.openai.com/v1
-    chronos config set llm.cloud.key sk-...
-    chronos config set llm.cloud.model gpt-4o
-
-    # provider modes: auto (cloud first, local fallback) | local | cloud
-
-# 5. INDEX YOUR CODEBASE
+# 4. INDEX YOUR CODEBASE
     chronos sync
-    # First run takes 10–60s depending on repo size. Subsequent runs are instant.
+    # First run builds the structural graph and semantic index.
 
-# 6. START USING
-    chronos ask "how does authentication work?"
-    chronos explain agent/login_handler.py --query "what validation does it do?"
-    chronos explain agent/login_handler.py::LoginHandler   # class + all methods
-    chronos map login_handler --downstream
-    chronos status
+# 5. START USING
+    chronos chat
 
 ──────────────────────────────────────────────────────────────────────────────
+HOW RETRIEVAL WORKS (chronos ask & chronos chat)
 ──────────────────────────────────────────────────────────────────────────────
-HOW RETRIEVAL WORKS (chronos ask)
-──────────────────────────────────────────────────────────────────────────────
 
-    chronos ask uses a stateful 4-step HyDE RAG pipeline:
-
-    Step 0 — Query Rewriting (Stateful Session)
-             Uses conversation history to intelligently resolve pronouns in
-             follow-up questions (e.g., "what does it do?"). Leverages Delta
-             Context Assembly to reuse KV caches and save tokens on local LLMs.
-
+    chronos uses a 4-step HyDE RAG pipeline:
+    Step 0 — Query Rewriting (Stateful Sessions)
+             Resolves pronouns via Delta Context Assembly on local LLMs.
     Step 1 — Repo Summary Fetch
-             Grabs the architectural [GLOBAL:REPO] summary for context.
-
-    Step 2 — HyDE Hypothetical Generation
-             Asks the LLM to generate a hypothetical code answer based on
-             the repo summary. Corrects for semantic hallucination drift.
-
+             Grabs the architectural [GLOBAL:REPO] summary.
+    Step 2 — HyDE Generation
+             LLM predicts code based on summary. Corrects hallucination.
     Step 3 — Hybrid Search (Dense + Sparse + Structural)
-             a) Dense vector search (HyDE-embedded query)
-             b) FTS5 keyword search on code signatures
-             c) RRF fusion of both channels
-             d) Structural Graph Expansion (NEW):
-                • Explicit mentions: "decision file" → boosts all decision.py nodes
-                • FTS5 frequency: files appearing 3+ times in keyword hits become
-                  implicit anchors (catches "phase 3 learning" → e2e_learning_flow.py)
-                • Local-Push PPR walk from anchors to surface callers/callees
-
+             Fuses Vector hits and FTS5 keyword hits.
+             Applies Structural Graph Expansion (PPR walk from anchors).
     Step 4 — Synthesis
-             Assembles up to 32,000 chars of grounded code context.
-             Each node snippet capped at 8,000 chars (full function bodies).
-             Cites every claim with [node:id] references.
-
-──────────────────────────────────────────────────────────────────────────────
-HOW EXPLAIN WORKS (chronos explain)
-──────────────────────────────────────────────────────────────────────────────
-
-    explain uses a 5-tier context assembly (NOT semantic search):
-
-    TIER 1 — File header (first 3,000 chars: imports, module docstring)
-    TIER 2 — Primary nodes (full code of exactly what was requested)
-    TIER 3 — CONTAINS children (all methods when a class is requested)
-    TIER 4 — CALLS cross-links (callees in other files, e.g. dao::set_q)
-    TIER 5 — IMPORTS file headers + repo architectural summary
-
-    Target format table:
-      file.py                  → all AST nodes in the file
-      file.py::function_name   → function + cross-linked callees
-      file.py::ClassName       → class + all its methods + cross-links
-      SymbolName               → resolved by alias or FTS5 fallback
-
-    Context budget: 32,000 chars / 8k tokens (10k per snippet).
-    ask vs explain:
-      chronos ask  — semantic search across the whole repo, best for discovery
-      chronos explain — scope-locked to a target, best for deep dives
-
-──────────────────────────────────────────────────────────────────────────────
-LLM CONFIGURATION (dual-profile, auto-switching)
-──────────────────────────────────────────────────────────────────────────────
-
-    llm.provider = auto     Cloud first, fall back to local (default)
-    llm.provider = local    Always use local Ollama
-    llm.provider = cloud    Always use cloud endpoint
-
-    # Local profile (Ollama / llama.cpp / OpenAI-compatible local):
-    chronos config set llm.local.url http://localhost:11434
-    chronos config set llm.local.key ollama
-    chronos config set llm.local.model llama3.1:8b
-
-    # Cloud profile (NVIDIA / OpenRouter / OpenAI / custom):
-    chronos config set llm.cloud.url https://api.openai.com/v1
-    chronos config set llm.cloud.key sk-...
-    chronos config set llm.cloud.model gpt-4o
-
-    # View current config:
-    chronos config list
-
-──────────────────────────────────────────────────────────────────────────────
-COMMON WORKFLOWS
-──────────────────────────────────────────────────────────────────────────────
-
-    # Ask a conceptual question across the whole codebase:
-    chronos ask "how does the Q-learning agent persist its state?"
-    chronos ask "what is phase 3 and who calls it?"
-    chronos ask "where is the connection pooler configured?"
-
-    # Explain a specific file / class / function:
-    chronos explain agent/decision.py
-    chronos explain agent/decision.py::QLearningDecision
-    chronos explain agent/decision.py::learn --query "how does it persist state?"
-
-    # After pulling changes, repair index if hook was bypassed:
-    chronos sync
-
-    # Debug a crash from CI logs:
-    chronos diagnose --trace build.log --top 10
-
-    # See what a function calls (downstream) or what calls it (upstream):
-    chronos map my_function --both --depth 2
-
-    # Export graph for visualization:
-    chronos export --format mermaid > graph.mmd
-
-    # Let AI write your commit message:
-    git add -A && chronos commit
+             Assembles 32k chars of context. Cites every claim with [node:id].
 
 ──────────────────────────────────────────────────────────────────────────────
 AI COMMIT MESSAGES (chronos commit)
 ──────────────────────────────────────────────────────────────────────────────
 
-    Writes a Conventional Commit message for your staged changes and commits
-    them for you — no more staring at a blank terminal after coding.
-
-    # 1. Stage the changes you want to commit:
-    git add -A
-    #    (or `git add <file>...` for only some changes)
-
-    # 2. Generate the message and commit:
-    chronos commit
-
-    What happens under the hood:
-      [1/3] Collecting staged changes...   → runs `git diff --cached`
-      [2/3] Waking LLM daemon...           → starts chronos-daemon on demand
-      [3/3] Generating commit message...   → your active LLM (local or cloud)
-                                            reads the diff and writes the message
-      --- Staged files ---
-      --- Proposed commit message ---
-      Accept this commit message? [Y/n/e]  → your review step
-
-    Confirmation prompt:
-      Y or Enter   Accept the message and run `git commit` right away
-      n            Abort — nothing is committed, your staged changes stay intact
-      e            Open $EDITOR (default vi) to rewrite the message, then commit
-
+    Writes a Conventional Commit message for staged changes.
+    git add -A && chronos commit
+    
     Options:
-      chronos commit --all     Stage everything first (tracked + untracked)
-      chronos commit --amend   Amend the last commit instead of creating a new one
-      chronos commit --yes     Accept without confirmation (for scripts/CI)
-
-    Generated messages follow Conventional Commits:
-      <type>(<scope>): <subject>
-      e.g. feat(calc): add divide function
-      types: feat, fix, refactor, docs, chore, test, perf, build, ci, style, revert
-      subject: imperative mood, lowercase, under 50 chars, no trailing period
-
-    No staged changes? chronos commit explains what to do and exits cleanly.
-    LLM message looks wrong? Press n to abort or e to edit — you always see
-    the message before anything is committed.
+      --all     Stage everything first (tracked + untracked)
+      --amend   Amend the last commit instead of creating a new one
 
 ──────────────────────────────────────────────────────────────────────────────
-GLOBAL INSTALLATION (make chronos available everywhere)
-──────────────────────────────────────────────────────────────────────────────
-
-    # Already covered in step 2 above:
-    cd CHRONO/build && sudo make install
-
-    # Or run directly from build without install:
-    alias chronos=/path/to/CHRONO/build/chronos
-
-──────────────────────────────────────────────────────────────────────────────
-GET HELP FOR ANY COMMAND
-──────────────────────────────────────────────────────────────────────────────
-
-    chronos <command> --help
-    # e.g. chronos sync --help, chronos ask --help
-
-──────────────────────────────────────────────────────────────────────────────
+Run `chronos <command> --help` for specific command options.
+```

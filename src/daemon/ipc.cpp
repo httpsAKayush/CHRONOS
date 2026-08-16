@@ -159,7 +159,8 @@ std::string encodeChunk(const ChronosResponseChunk& c) {
     out << "{\"traceId\":\"" << jsonEscape(c.traceId) << "\","
         << "\"textDelta\":\"" << jsonEscape(c.textDelta) << "\","
         << "\"done\":" << (c.done ? "true" : "false") << ","
-        << "\"unverifiedCitation\":" << (c.unverifiedCitation ? "true" : "false") << "}";
+        << "\"unverifiedCitation\":" << (c.unverifiedCitation ? "true" : "false") << ","
+        << "\"isStatus\":" << (c.isStatus ? "true" : "false") << "}";
     return out.str();
 }
 
@@ -169,6 +170,7 @@ ChronosResponseChunk decodeChunk(const std::string& json) {
     c.textDelta = extractStringField(json, "textDelta");
     c.done = extractBoolField(json, "done", false);
     c.unverifiedCitation = extractBoolField(json, "unverifiedCitation", false);
+    c.isStatus = extractBoolField(json, "isStatus", false);
     return c;
 }
 

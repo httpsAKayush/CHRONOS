@@ -191,17 +191,17 @@ bool Config::cloudConfigured() const {
 }
 
 // ── Resolved convenience (respects providerMode) ────────────────────────
-// In "auto" mode the local profile is preferred; the cloud profile is only
-// returned when the local one is absent (the factory probes availability
-// separately).  In "local"/"cloud" modes only that profile is used.
+// In "auto" mode the cloud profile is preferred; the local profile is only
+// returned when the cloud one is absent (the factory probes availability
+// separately and will fall back to local if cloud fails).
 std::string Config::provider() const {
     std::string mode = providerMode();
     if (mode == "local") return "ollama";
     if (mode == "cloud") return "openai";
 
     // auto
-    if (localConfigured()) return "ollama";
-    return "openai";
+    if (cloudConfigured()) return "openai";
+    return "ollama";
 }
 
 std::string Config::apiUrl() const {
@@ -209,7 +209,7 @@ std::string Config::apiUrl() const {
     std::string url;
     if (mode == "local") url = localUrl();
     else if (mode == "cloud") url = cloudUrl();
-    else url = localConfigured() ? localUrl() : cloudUrl();
+    else url = cloudConfigured() ? cloudUrl() : localUrl();
 
     if (url.find("completions") != std::string::npos) return url;
     if (url.back() == '/') url.pop_back();
@@ -228,14 +228,14 @@ std::string Config::apiKey() const {
     std::string mode = providerMode();
     if (mode == "local") return localKey();
     if (mode == "cloud") return cloudKey();
-    return localConfigured() ? localKey() : cloudKey();
+    return cloudConfigured() ? cloudKey() : localKey();
 }
 
 std::string Config::model() const {
     std::string mode = providerMode();
     if (mode == "local") return localModel();
     if (mode == "cloud") return cloudModel();
-    return localConfigured() ? localModel() : cloudModel();
+    return cloudConfigured() ? cloudModel() : localModel();
 }
 
 bool Config::valid() const {
