@@ -308,7 +308,7 @@ int CmdChat::execute(int argc, char** argv) {
         if (!noHistory) {
             for (const auto& msg : history) {
                 if (msg.role == "user") {
-                    std::cout << "\033[1;32m>\033[1;36m " << msg.content << "\033[0m\n";
+                    std::cout << "\033[38;5;204m>\033[38;5;210m " << msg.content << "\033[0m\n";
                 } else {
                     formatter.print(msg.content);
                     formatter.finish();
@@ -319,9 +319,9 @@ int CmdChat::execute(int argc, char** argv) {
     }
 
     while (true) {
-        // \033[1;36m (Cyan) at the end of the prompt leaves the terminal 
-        // in a cyan state, making the user's typed input cyan!
-        char* raw_line = linenoise("\033[1;32m>\033[1;36m ");
+        // \033[38;5;210m (Light Salmon/Rose) leaves the terminal in a 
+        // bright, light maroonish state for the user's typed input!
+        char* raw_line = linenoise("\033[38;5;204m>\033[38;5;210m ");
         
         // Immediately reset the terminal color when they hit Enter
         std::cout << "\033[0m";
