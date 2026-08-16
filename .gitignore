@@ -18,3 +18,5 @@ build/
 .dev_trash/
 
 .agents/
+.kilo/
+--status/
